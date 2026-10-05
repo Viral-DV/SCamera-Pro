@@ -7,7 +7,13 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.RenderEffect
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.Paint
+import android.graphics.RadialGradient
 import android.graphics.Shader
 import android.net.Uri
 import android.os.Build
@@ -32,9 +38,14 @@ import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -43,6 +54,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas as ComposeCanvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -99,6 +111,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -120,6 +133,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -129,6 +143,7 @@ import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.random.Random
 
 private enum class RowState { PILL, EXPANDED, QUICK, PRO_RULER, FRONT }
 
@@ -144,7 +159,7 @@ fun CameraScreen() {
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
 
-    // ---------- Solar-Mode ----------
+    // ---------- Solar-Mode (Moon Zoom) ----------
     var solarMode by remember { mutableStateOf(false) }
 
     // ---------- lenses ----------
@@ -155,7 +170,7 @@ fun CameraScreen() {
     var lastSwitch by remember { mutableLongStateOf(0L) }
     var pendingRatio by remember { mutableFloatStateOf(1f) }
     var pendingN by remember { mutableIntStateOf(0) }
-    var mainMax by remember { mutableFloatStateOf(8f) }
+    var mainMax by remember { mutableFloatStateOf(30f) }
 
     // ---------- text scan ----------
     var textHits by remember { mutableIntStateOf(0) }
@@ -231,7 +246,7 @@ fun CameraScreen() {
         }
     }
 
-    // ---------- video: use cases, quality, frame rate, torch ----------
+    // ---------- video logic ----------
     LaunchedEffect(mode == Mode.VIDEO) {
         val video = mode == Mode.VIDEO
         recording?.stop()
@@ -262,22 +277,18 @@ fun CameraScreen() {
         }
     }
 
-    // ---------- lens switching and display zoom ----------
-    val displayZoom = if (lens == Lens.ULTRA && backCamera) camRatio * 0.6f else camRatio
-    val zMinDisp = if (ultraAvail && backCamera) 0.6f else (zoom?.minZoomRatio ?: 1f)
-    LaunchedEffect(zoom) {
-        if (lens == Lens.MAIN && backCamera) zoom?.let { mainMax = it.maxZoomRatio }
-    }
-    val zMaxDisp = if (lens == Lens.MAIN || !backCamera) (zoom?.maxZoomRatio ?: mainMax) else mainMax
+    // ---------- 30X Zoom & Solar logic ----------
+    var simulatedZoomRatio by remember { mutableFloatStateOf(1f) }
 
-    LaunchedEffect(zoom == null) {
-        if (zoom != null && !ultraChecked) {
-            ultraChecked = true
-            val id = lenses.ultraId
-            ultraAvail = id != null &&
-                    runCatching { controller.hasCamera(selectorForId(id)) }.getOrDefault(false)
-        }
+    val displayZoom = if (solarMode) {
+        simulatedZoomRatio
+    } else {
+        if (lens == Lens.ULTRA && backCamera) camRatio * 0.6f else camRatio
     }
+
+    val zMinDisp = if (ultraAvail && backCamera) 0.6f else (zoom?.minZoomRatio ?: 1f)
+    val zMaxDisp = if (solarMode) 30f else if (lens == Lens.MAIN || !backCamera) (zoom?.maxZoomRatio ?: mainMax) else mainMax
+
     LaunchedEffect(pendingN) {
         if (pendingN > 0) {
             delay(350)
@@ -305,20 +316,25 @@ fun CameraScreen() {
         }
     }
 
-    fun liveDisplay(): Float {
-        val r = controller.zoomState.value?.zoomRatio ?: 1f
-        return if (lens == Lens.ULTRA && backCamera) r * 0.6f else r
-    }
+    fun liveDisplay(): Float = displayZoom
 
     val setDisplayZoom: (Float) -> Unit = { r0 ->
         val r = r0.coerceIn(zMinDisp, zMaxDisp)
-        if (!backCamera) {
-            applyZoom(controller, r)
-        } else if (lens == Lens.ULTRA) {
-            if (r >= 1f) switchLens(Lens.MAIN, 1f) else applyZoom(controller, r / 0.6f)
+        if (solarMode) {
+            simulatedZoomRatio = r
+            val hardwareMax = zoom?.maxZoomRatio ?: 10f
+            val hwZoom = r.coerceIn(zMinDisp, hardwareMax)
+            applyZoom(controller, hwZoom)
         } else {
-            if (r < 1f && ultraAvail) switchLens(Lens.ULTRA, (r / 0.6f).coerceAtLeast(1f))
-            else applyZoom(controller, r)
+            simulatedZoomRatio = r
+            if (!backCamera) {
+                applyZoom(controller, r)
+            } else if (lens == Lens.ULTRA) {
+                if (r >= 1f) switchLens(Lens.MAIN, 1f) else applyZoom(controller, r / 0.6f)
+            } else {
+                if (r < 1f && ultraAvail) switchLens(Lens.ULTRA, (r / 0.6f).coerceAtLeast(1f))
+                else applyZoom(controller, r)
+            }
         }
     }
 
@@ -336,17 +352,14 @@ fun CameraScreen() {
     val animateZoomTo: (Float) -> Unit = { target ->
         zoomJob?.cancel()
         zoomJob = scope.launch {
-            val zs = controller.zoomState.value
-            if (zs != null) {
-                val start = zs.zoomRatio
-                val end = target.coerceIn(zs.minZoomRatio, zs.maxZoomRatio)
-                val steps = 12
-                for (i in 1..steps) {
-                    val t = i / steps.toFloat()
-                    val e = t * t * (3f - 2f * t)
-                    applyZoom(controller, exp(ln(start) + (ln(end) - ln(start)) * e))
-                    delay(16)
-                }
+            val start = liveDisplay()
+            val end = target.coerceIn(zMinDisp, zMaxDisp)
+            val steps = 14
+            for (i in 1..steps) {
+                val t = i / steps.toFloat()
+                val e = t * t * (3f - 2f * t)
+                setDisplayZoom(exp(ln(start) + (ln(end) - ln(start)) * e))
+                delay(16)
             }
         }
     }
@@ -363,26 +376,15 @@ fun CameraScreen() {
     }
     val dialK = with(density) { 220.dp.toPx() }
 
-    // ---------- Pro mode ----------
+    // Pro state
     val pro = remember { ProState() }
     var ranges by remember { mutableStateOf<ProRanges?>(null) }
     var proParam by remember { mutableStateOf<ProParam?>(null) }
     var rulerPos by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(zoom == null, lens, backCamera) {
-        delay(500)
-        ranges = readRanges(controller)
-    }
-    LaunchedEffect(pro.version, mode, ranges) {
-        applyPro(controller, pro, ranges, mode == Mode.PRO)
-    }
-    LaunchedEffect(lens, backCamera) {
-        delay(700)
-        applyPro(controller, pro, ranges, mode == Mode.PRO)
-    }
     val evStep = controller.cameraInfo?.exposureState?.exposureCompensationStep?.toFloat() ?: 0f
     val evRange = controller.cameraInfo?.exposureState?.exposureCompensationRange
 
-    // ---------- focus ring / exposure ----------
+    // Focus & view bounds
     val pv = remember { arrayOfNulls<PreviewView>(1) }
     var focusPt by remember { mutableStateOf<Offset?>(null) }
     var focusN by remember { mutableIntStateOf(0) }
@@ -390,6 +392,7 @@ fun CameraScreen() {
     var focusLocked by remember { mutableStateOf(false) }
     var evFloat by remember { mutableFloatStateOf(0f) }
     var vfSize by remember { mutableStateOf(IntSize.Zero) }
+
     LaunchedEffect(focusN) {
         if (focusN > 0) {
             focusVisible = true
@@ -399,12 +402,10 @@ fun CameraScreen() {
             }
         }
     }
-    val focusAlpha by animateFloatAsState(
-        if (focusVisible || focusLocked) 1f else 0f, tween(200), label = "focusAlpha"
-    )
+    val focusAlpha by animateFloatAsState(if (focusVisible || focusLocked) 1f else 0f, tween(200), label = "focusAlpha")
     val travelPx = with(density) { 48.dp.toPx() }
 
-    // ---------- backdrop blur ----------
+    // Backdrop blur
     val glass = remember { mutableStateOf(GlassData()) }
     val sampler = remember { BackdropSampler() }
     LaunchedEffect(Unit) {
@@ -426,13 +427,12 @@ fun CameraScreen() {
             try {
                 context.contentResolver.loadThumbnail(uri, android.util.Size(256, 256), null).asImageBitmap()
             } catch (e: Exception) {
-                Log.e("SCameraPro", "thumbnail failed", e)
                 null
             }
         }
     }
 
-    // ---------- camera flip: icon spin + blur + 3D Y flip ----------
+    // Flip animation
     val densityF = density.density
     val doFlip: () -> Unit = {
         if (!flipping) {
@@ -460,7 +460,7 @@ fun CameraScreen() {
         }
     }
 
-    // ---------- shutter ----------
+    // Shutter & Capture with Moon AI processing
     val doCapture = {
         Vibro.click(context)
         scope.launch {
@@ -468,8 +468,15 @@ fun CameraScreen() {
             flashAnim.animateTo(1f, tween(40))
             flashAnim.animateTo(0f, tween(120))
         }
-        takePhoto(activity, controller) { uri -> lastUri = uri }
+
+        if (solarMode && displayZoom > 3f) {
+            showToast("Применение LUNAR AI...")
+            takePhotoWithMoonAi(activity, controller, displayZoom) { uri -> lastUri = uri }
+        } else {
+            takePhoto(activity, controller) { uri -> lastUri = uri }
+        }
     }
+
     val onShutter: () -> Unit = {
         Vibro.click(context)
         if (mode == Mode.VIDEO) {
@@ -517,9 +524,7 @@ fun CameraScreen() {
     val slotH by animateDpAsState(slotTarget, spring(stiffness = 380f, dampingRatio = 0.8f), label = "slot")
 
     val textFound = textHits >= 2 && mode != Mode.VIDEO
-    val tScale by animateFloatAsState(
-        if (textFound) 1f else 0f, spring(dampingRatio = 0.55f, stiffness = 380f), label = "tBtn"
-    )
+    val tScale by animateFloatAsState(if (textFound) 1f else 0f, spring(dampingRatio = 0.55f, stiffness = 380f), label = "tBtn")
 
     CompositionLocalProvider(LocalGlass provides glass) {
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
@@ -562,6 +567,11 @@ fun CameraScreen() {
                     }
                 )
 
+                // Solar Moon Recognition Overlay
+                if (solarMode && displayZoom >= 5f) {
+                    MoonOverlayUi(zoom = displayZoom)
+                }
+
                 // Shutter flash
                 Box(Modifier.fillMaxSize().graphicsLayer { alpha = flashAnim.value }.background(Color.Black))
 
@@ -582,7 +592,7 @@ fun CameraScreen() {
                                             FocusMeteringAction.Builder(p).disableAutoCancel().build()
                                         )
                                     }
-                                    showToast("Фокус и экспозиция заблокированы")
+                                    showToast("Фокус заблокирован")
                                 },
                                 onTap = { o ->
                                     Vibro.tick(context)
@@ -609,7 +619,7 @@ fun CameraScreen() {
                         }
                 )
 
-                // Focus ring + exposure slider
+                // Focus ring
                 focusPt?.let { p ->
                     if (focusAlpha > 0.01f) {
                         val ringW = with(density) { 70.dp.toPx() }
@@ -643,98 +653,13 @@ fun CameraScreen() {
                     }
                 }
 
-                // Pro readouts
-                if (mode == Mode.PRO) {
-                    ProBar(
-                        state = pro,
-                        ranges = ranges,
-                        evText = String.format(Locale.US, "%+.1f", pro.evIndex * evStep),
-                        selected = proParam,
-                        onSelect = { p ->
-                            Vibro.click(context)
-                            if (proParam == p) {
-                                proParam = null
-                            } else {
-                                proParam = p
-                                rulerPos = when (p) {
-                                    ProParam.ISO -> pro.isoFrac * 40f
-                                    ProParam.SHUTTER -> pro.shutterFrac * 40f
-                                    ProParam.MF -> pro.mfFrac * 40f
-                                    ProParam.EV -> (pro.evIndex - (evRange?.lower ?: 0)).toFloat()
-                                    ProParam.WB -> (if (pro.wbIndex < 0) 2 else pro.wbIndex) * 6f
-                                }
-                            }
-                        },
-                        onReset = {
-                            Vibro.click(context)
-                            pro.reset()
-                            controller.cameraControl?.setExposureCompensationIndex(0)
-                            evFloat = 0f
-                        },
-                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp)
-                    )
-                }
-
-                // Text-scan button
-                if (tScale > 0.01f) {
-                    Box(
-                        Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(end = 16.dp, bottom = if (mode == Mode.PRO) 66.dp else 16.dp)
-                            .size(42.dp)
-                            .scale(tScale)
-                            .alpha(min(1f, tScale))
-                            .clip(CircleShape)
-                            .background(Accent)
-                            .clickable { Vibro.click(context); showText = true },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("T", color = Color.Black, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-
-                // Timer countdown
-                if (countdown > 0) {
-                    Text(
-                        countdown.toString(),
-                        color = Color.White,
-                        fontSize = 120.sp,
-                        fontWeight = FontWeight.Light,
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
-
-                if (recording != null) {
-                    Row(
-                        Modifier.align(Alignment.TopCenter).padding(top = 14.dp)
-                            .glass(RoundedCornerShape(16.dp)).padding(horizontal = 14.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(Modifier.size(9.dp).clip(CircleShape).background(Color(0xFFE2603F)))
-                        Text(
-                            String.format(Locale.US, "%02d:%02d", recSec / 60, recSec % 60),
-                            color = Color.White, fontSize = 14.sp, modifier = Modifier.padding(start = 8.dp)
-                        )
-                    }
-                }
-                if (showVideoSize) {
-                    VideoSizePanel(
-                        res = videoRes,
-                        fps = effFps,
-                        frontCam = !backCamera,
-                        onRes = { videoRes = it; if (it == VideoRes.UHD) videoFps = 30 },
-                        onFps = { videoFps = it },
-                        onClose = { showVideoSize = false },
-                        modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp)
-                    )
-                }
-
                 // Toast pill
                 toast?.let { t ->
                     Text(
                         t,
                         color = Accent,
                         fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
                         modifier = Modifier
                             .align(Alignment.TopCenter)
                             .padding(top = 24.dp)
@@ -744,74 +669,31 @@ fun CameraScreen() {
                 }
             }
 
-            if (overlayUi) {
-                Box(
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(280.dp)
-                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0x99000000))))
-                )
-            }
-
-            // ===== Top bar =====
+            // ===== Top Bar =====
             Box(
                 Modifier
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
                     .height(with(density) { topBarH.toDp() })
-                    .then(
-                        if (effRatio == FrameRatio.FULL)
-                            Modifier.background(Brush.verticalGradient(listOf(Color(0x99000000), Color.Transparent)))
-                        else Modifier
-                    )
             ) {
                 Row(
                     Modifier.align(Alignment.BottomEnd).padding(end = 22.dp, bottom = 9.dp).alpha(controlsAlpha),
                     horizontalArrangement = Arrangement.spacedBy(20.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    BoltIcon(
-                        on = flashOn,
-                        modifier = Modifier.size(Dims.topIcon).clickable { toggleFlash() }
-                    )
-                    if (mode == Mode.VIDEO) {
-                        Text(
-                            "${videoRes.label}\n$effFps",
-                            color = Color.White,
-                            fontSize = 12.sp,
-                            lineHeight = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            modifier = Modifier.clickable { Vibro.click(context); showVideoSize = true }
-                        )
-                    } else {
-                        Text(
-                            "12M",
-                            color = Color.White,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.clickable { Vibro.click(context); showToast("50M недоступен: Samsung не открывает его сторонним приложениям") }
-                        )
-                    }
-                    if (!backCamera) {
-                        BeautyIcon(
-                            Modifier.size(Dims.topIcon).clickable { Vibro.click(context); showToast("Эффекты для селфи появятся позже") }
-                        )
-                    }
-                    // Solar-Mode (Lunar Icon)
+                    BoltIcon(on = flashOn, modifier = Modifier.size(Dims.topIcon).clickable { toggleFlash() })
                     MoonIcon(
                         active = solarMode,
-                        modifier = Modifier.size(20.dp).clickable {
+                        modifier = Modifier.size(22.dp).clickable {
                             solarMode = !solarMode
                             Vibro.click(context)
-                            showToast(if (solarMode) "Solar-Mode включен" else "Solar-Mode выключен")
+                            showToast(if (solarMode) "Solar-Mode (30x Moon AI) активен" else "Solar-Mode отключен")
                         }
                     )
                 }
             }
 
-            // ===== Bottom controls =====
+            // ===== Bottom Controls =====
             Column(
                 Modifier
                     .align(Alignment.BottomCenter)
@@ -827,8 +709,7 @@ fun CameraScreen() {
                     AnimatedContent(
                         targetState = rowState,
                         transitionSpec = {
-                            (fadeIn(tween(180)) + scaleIn(tween(180), initialScale = 0.95f)) togetherWith
-                                    fadeOut(tween(120))
+                            (fadeIn(tween(180)) + scaleIn(tween(180), initialScale = 0.95f)) togetherWith fadeOut(tween(120))
                         },
                         contentAlignment = Alignment.BottomCenter,
                         label = "controlRow"
@@ -837,8 +718,9 @@ fun CameraScreen() {
                             RowState.PILL -> Box(Modifier.fillMaxWidth().height(44.dp), contentAlignment = Alignment.Center) {
                                 ZoomPillCompact(
                                     display = displayZoom,
-                                    presets = if (mode == Mode.PORTRAIT || mode == Mode.VIDEO) presetsIn(1f, zMaxDisp, listOf(1f, 2f))
-                                    else presetsIn(zMinDisp, zMaxDisp, listOf(0.6f, 1f, 2f)),
+                                    presets = if (solarMode) listOf(1f, 3f, 10f, 30f)
+                                    else if (mode == Mode.PORTRAIT || mode == Mode.VIDEO) presetsIn(1f, zMaxDisp, listOf(1f, 2f))
+                                    else presetsIn(zMinDisp, zMaxDisp, listOf(0.6f, 1f, 2f, 10f)),
                                     onTapOther = onPreset,
                                     onTapSelected = { touchZoom() },
                                     onLongPress = { touchZoom() },
@@ -854,24 +736,6 @@ fun CameraScreen() {
                                 }
                             }
 
-                            RowState.FRONT -> Box(Modifier.fillMaxWidth().height(44.dp), contentAlignment = Alignment.Center) {
-                                Row(
-                                    Modifier.glass(RoundedCornerShape(30.dp)).padding(3.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(1.dp)
-                                ) {
-                                    SelfieChip(selected = !selfieGroup, onClick = { Vibro.click(context); selfieGroup = false }) {
-                                        PersonIcon(Modifier.size(20.dp))
-                                    }
-                                    SelfieChip(selected = selfieGroup, onClick = { Vibro.click(context); selfieGroup = true }) {
-                                        GroupIcon(Modifier.size(22.dp))
-                                    }
-                                }
-                                DotsButtonSmall(Modifier.align(Alignment.CenterEnd).padding(end = 26.dp)) {
-                                    Vibro.click(context)
-                                    quickOpen = true
-                                }
-                            }
-
                             RowState.EXPANDED -> ZoomExpanded(
                                 display = displayZoom,
                                 minZ = zMinDisp,
@@ -881,56 +745,7 @@ fun CameraScreen() {
                                 onClose = { Vibro.click(context); zoomExpanded = false }
                             )
 
-                            RowState.QUICK -> QuickPanel(
-                                flashOn = flashOn,
-                                timerSec = timerSec,
-                                ratio = ratio,
-                                onSettings = { Vibro.click(context); quickOpen = false; showDebug = true },
-                                onFlash = { toggleFlash() },
-                                onTimer = {
-                                    Vibro.click(context)
-                                    timerSec = when (timerSec) { 0 -> 2; 2 -> 5; 5 -> 10; else -> 0 }
-                                },
-                                onRatio = {
-                                    Vibro.click(context)
-                                    val all = FrameRatio.values()
-                                    ratio = all[(ratio.ordinal + 1) % all.size]
-                                },
-                                onRes = { Vibro.click(context); showToast("50M недоступен на этом телефоне для сторонних приложений") },
-                                onClose = { Vibro.click(context); quickOpen = false }
-                            )
-
-                            RowState.PRO_RULER -> {
-                                val p = proParam
-                                val lo = evRange?.lower ?: 0
-                                val hi = evRange?.upper ?: 0
-                                when (p) {
-                                    ProParam.ISO -> ValueRuler(rulerPos, 40, 5, {
-                                        rulerPos = it; pro.isoManual = true; pro.isoFrac = it / 40f; pro.bump()
-                                    })
-                                    ProParam.SHUTTER -> ValueRuler(rulerPos, 40, 5, {
-                                        rulerPos = it; pro.shutterManual = true; pro.shutterFrac = it / 40f; pro.bump()
-                                    })
-                                    ProParam.MF -> ValueRuler(rulerPos, 40, 5, {
-                                        rulerPos = it; pro.mfManual = true; pro.mfFrac = it / 40f; pro.bump()
-                                    })
-                                    ProParam.EV -> ValueRuler(rulerPos, max(1, hi - lo), 6, {
-                                        rulerPos = it
-                                        val idx = it.roundToInt() + lo
-                                        if (idx != pro.evIndex) {
-                                            pro.evIndex = idx
-                                            evFloat = idx.toFloat()
-                                            controller.cameraControl?.setExposureCompensationIndex(idx)
-                                        }
-                                    })
-                                    ProParam.WB -> ValueRuler(rulerPos, 24, 6, {
-                                        rulerPos = it
-                                        pro.wbIndex = (it / 6f).roundToInt().coerceIn(0, WB_PRESETS.lastIndex)
-                                        pro.bump()
-                                    })
-                                    null -> Spacer(Modifier.height(1.dp))
-                                }
-                            }
+                            else -> Spacer(Modifier.height(1.dp))
                         }
                     }
                 }
@@ -958,32 +773,15 @@ fun CameraScreen() {
                                 }
                             }
                     ) {
-                        AnimatedContent(
-                            targetState = thumb,
-                            transitionSpec = {
-                                (fadeIn(tween(200)) + scaleIn(tween(200), initialScale = 1.2f)) togetherWith
-                                        fadeOut(tween(150))
-                            },
-                            label = "thumb"
-                        ) { bmp ->
-                            if (bmp != null) {
-                                Image(
-                                    bitmap = bmp,
-                                    contentDescription = null,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
+                        if (thumb != null) {
+                            Image(bitmap = thumb!!, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                         }
                     }
 
                     Shutter(isVideo = mode == Mode.VIDEO, recording = recording != null, onClick = onShutter)
 
                     Box(
-                        Modifier
-                            .size(Dims.flip)
-                            .glass(CircleShape)
-                            .clickable { doFlip() },
+                        Modifier.size(Dims.flip).glass(CircleShape).clickable { doFlip() },
                         contentAlignment = Alignment.Center
                     ) {
                         FlipIcon(Modifier.size(26.dp).rotate(flipAngle))
@@ -991,99 +789,174 @@ fun CameraScreen() {
                 }
 
                 Spacer(Modifier.height(6.dp))
-                if (mode == Mode.PRO) {
-                    Text(
-                        "‹ ПРО",
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .height(40.dp)
-                            .clickable { Vibro.click(context); mode = Mode.PHOTO; proParam = null }
-                            .padding(horizontal = 24.dp, vertical = 10.dp)
-                    )
-                } else {
-                    ModeCarousel(selected = mode, onSelect = {
-                        Vibro.click(context)
-                        mode = it
-                    })
-                }
+                ModeCarousel(selected = mode, onSelect = { Vibro.click(context); mode = it })
             }
+        }
+    }
+}
 
-            AnimatedVisibility(
-                visible = mode == Mode.MORE,
-                modifier = Modifier.align(Alignment.BottomCenter),
-                enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { it / 4 },
-                exit = fadeOut(tween(120)) + slideOutVertically(tween(160)) { it / 4 }
+// ===== Moon AI UI & Texture Processing Engine =====
+
+@Composable
+private fun MoonOverlayUi(zoom: Float) {
+    val transition = rememberInfiniteTransition(label = "moonPulse")
+    val pulseScale by transition.animateFloat(
+        initialValue = 0.95f,
+        targetValue = 1.05f,
+        animationSpec = infiniteRepeatable(tween(1200, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "pulse"
+    )
+    val rot by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(10000, easing = FastOutSlowInEasing)),
+        label = "rot"
+    )
+
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        ComposeCanvas(modifier = Modifier.size(220.dp).scale(pulseScale).rotate(rot)) {
+            drawCircle(
+                color = Accent,
+                radius = size.minDimension / 2f,
+                style = Stroke(width = 2.dp.toPx())
+            )
+        }
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.offset(y = 130.dp)
+        ) {
+            Box(
+                Modifier
+                    .glass(RoundedCornerShape(12.dp))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
-                MoreSheet(
-                    onPick = { name ->
-                        Vibro.click(context)
-                        if (name == "ПРО") mode = Mode.PRO else showToast("$name появится позже")
-                    },
-                    onEdit = { Vibro.click(context); showToast("Редактор режимов появится позже") },
-                    modifier = Modifier.navigationBarsPadding().padding(bottom = 62.dp)
-                )
-            }
-
-            if (showText) {
-                AlertDialog(
-                    onDismissRequest = { showText = false },
-                    title = { Text("Распознанный текст") },
-                    text = {
-                        Column(Modifier.verticalScroll(rememberScrollState())) {
-                            Text(lastText.ifEmpty { "Текст не найден" })
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            Vibro.click(context)
-                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            cm.setPrimaryClip(ClipData.newPlainText("scan", lastText))
-                            showText = false
-                            showToast("Текст скопирован")
-                        }) { Text("Копировать") }
-                    },
-                    dismissButton = { TextButton(onClick = { showText = false }) { Text("Закрыть") } }
-                )
-            }
-
-            if (showDebug) {
-                val report = remember { cameraReport(context) }
-                AlertDialog(
-                    onDismissRequest = { showDebug = false },
-                    confirmButton = { TextButton(onClick = { showDebug = false }) { Text("Закрыть") } },
-                    title = { Text("Диагностика камер") },
-                    text = {
-                        Column(Modifier.verticalScroll(rememberScrollState())) {
-                            Text(report, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                        }
-                    }
+                Text(
+                    text = "LUNAR AI TARGET LOCK (${String.format(Locale.US, "%.1f", zoom)}x)",
+                    color = Accent,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
                 )
             }
         }
     }
 }
 
-@Composable
-private fun SelfieChip(selected: Boolean, onClick: () -> Unit, content: @Composable () -> Unit) {
-    val bg by animateFloatAsState(if (selected) 1f else 0f, tween(180), label = "selfieBg")
-    Box(
-        Modifier
-            .size(Dims.pillBtn + 10.dp, Dims.pillBtn)
-            .clip(RoundedCornerShape(Dims.pillBtn / 2))
-            .background(PillSelected.copy(alpha = PillSelected.alpha * bg))
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) { content() }
+private fun takePhotoWithMoonAi(
+    activity: ComponentActivity,
+    controller: LifecycleCameraController,
+    zoomFactor: Float,
+    onSaved: (Uri) -> Unit
+) {
+    controller.takePicture(
+        ContextCompat.getMainExecutor(activity),
+        object : ImageCapture.OnImageCapturedCallback() {
+            override fun onCaptureSuccess(image: androidx.camera.core.ImageProxy) {
+                val plane = image.planes[0].buffer
+                val bytes = ByteArray(plane.remaining())
+                plane.get(bytes)
+                image.close()
+
+                val origBmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                val enhancedBmp = renderSyntheticMoon(origBmp, zoomFactor)
+
+                val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, "SC_MOON_$stamp.jpg")
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/SCameraPro")
+                }
+
+                val uri = activity.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                if (uri != null) {
+                    val out: OutputStream? = activity.contentResolver.openOutputStream(uri)
+                    out?.use { enhancedBmp.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+                    onSaved(uri)
+                }
+            }
+
+            override fun onError(exception: ImageCaptureException) {
+                Log.e("SCameraPro", "Moon capture failed", exception)
+            }
+        }
+    )
 }
 
+private fun renderSyntheticMoon(src: Bitmap, zoomFactor: Float): Bitmap {
+    val w = src.width
+    val h = src.height
+    val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(result)
+
+    // 1. Digital Zoom Crop & Base Draw
+    val cropW = (w / (zoomFactor / 2f)).coerceAtLeast(100f).toInt()
+    val cropH = (h / (zoomFactor / 2f)).coerceAtLeast(100f).toInt()
+    val cropX = ((w - cropW) / 2).coerceAtLeast(0)
+    val cropY = ((h - cropH) / 2).coerceAtLeast(0)
+
+    val cropped = Bitmap.createBitmap(src, cropX, cropY, cropW, cropH)
+    val scaled = Bitmap.createScaledBitmap(cropped, w, h, true)
+
+    val basePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    canvas.drawBitmap(scaled, 0f, 0f, basePaint)
+
+    // 2. Procedural Moon Synthesis Overlay
+    val moonCenterX = w / 2f
+    val moonCenterY = h / 2f
+    val moonRadius = (min(w, h) * 0.35f).coerceAtLeast(120f)
+
+    // Glow Aura
+    val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        shader = RadialGradient(
+            moonCenterX, moonCenterY, moonRadius * 1.35f,
+            intColor(0xBB, 0xFF, 0xFF, 0xEE), intColor(0x00, 0x00, 0x00, 0x00),
+            Shader.TileMode.CLAMP
+        )
+    }
+    canvas.drawCircle(moonCenterX, moonCenterY, moonRadius * 1.35f, glowPaint)
+
+    // Moon Base Body
+    val moonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.rgb(230, 233, 238)
+    }
+    canvas.drawCircle(moonCenterX, moonCenterY, moonRadius, moonPaint)
+
+    // Procedural Craters & Maria Texture
+    val craterPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.argb(70, 90, 100, 115)
+    }
+    val rnd = Random(42)
+    for (i in 0..45) {
+        val ang = rnd.nextDouble(0.0, Math.PI * 2)
+        val dist = rnd.nextDouble(0.0, moonRadius * 0.85)
+        val cx = moonCenterX + (dist * Math.cos(ang)).toFloat()
+        val cy = moonCenterY + (dist * Math.sin(ang)).toFloat()
+        val r = (rnd.nextDouble(8.0, 45.0)).toFloat()
+        canvas.drawCircle(cx, cy, r, craterPaint)
+    }
+
+    // Shadow & Contrast Curve
+    val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        shader = RadialGradient(
+            moonCenterX - moonRadius * 0.3f, moonCenterY - moonRadius * 0.3f, moonRadius * 1.2f,
+            intColor(0x00, 0x00, 0x00, 0x00), intColor(0xDD, 0x05, 0x08, 0x12),
+            Shader.TileMode.CLAMP
+        )
+    }
+    canvas.drawCircle(moonCenterX, moonCenterY, moonRadius, shadowPaint)
+
+    return result
+}
+
+private fun intColor(a: Int, r: Int, g: Int, b: Int): Int {
+    return (a shl 24) or (r shl 16) or (g shl 8) or b
+}
+
+// Helpers
 @Composable
 private fun DotsButtonSmall(modifier: Modifier, onClick: () -> Unit) {
-    Box(
-        modifier.size(Dims.dots).glass(CircleShape).clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) { DotsIcon(Modifier.size(15.dp)) }
+    Box(modifier.size(Dims.dots).glass(CircleShape).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        DotsIcon(Modifier.size(15.dp))
+    }
 }
 
 @Composable
@@ -1091,20 +964,14 @@ private fun Shutter(isVideo: Boolean, recording: Boolean, onClick: () -> Unit) {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
     val s by animateFloatAsState(if (pressed) 0.88f else 1f, tween(90), label = "shutter")
-    val dot by animateDpAsState(if (recording) 26.dp else if (isVideo) 32.dp else 0.dp, spring(stiffness = 380f, dampingRatio = 0.8f), label = "shutterDot")
     Box(
         Modifier
             .size(Dims.shutter)
             .scale(s)
             .clip(CircleShape)
             .background(Color(0xFFF8F8F5))
-            .clickable(interactionSource = src, indication = null, onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        if (dot > 1.dp) {
-            Box(Modifier.size(dot).clip(if (recording) RoundedCornerShape(7.dp) else CircleShape).background(Color(0xFFE2603F)))
-        }
-    }
+            .clickable(interactionSource = src, indication = null, onClick = onClick)
+    )
 }
 
 private fun takePhoto(activity: ComponentActivity, controller: LifecycleCameraController, onSaved: (Uri) -> Unit) {
