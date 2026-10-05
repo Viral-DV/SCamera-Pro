@@ -34,7 +34,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -51,7 +50,15 @@ enum class VideoRes(val label: String, val quality: Quality) {
     HD("HD", Quality.HD)
 }
 
-/** Starts recording into Movies/SCameraPro; [onDone] gets the saved video (or null on error). */
+@OptIn(ExperimentalCamera2Interop::class)
+fun applyFps(controller: LifecycleCameraController, fps: Int) {
+    val cc = controller.cameraControl ?: return
+    val options = CaptureRequestOptions.Builder()
+        .setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
+        .build()
+    Camera2CameraControl.from(cc).setCaptureRequestOptions(options)
+}
+
 @SuppressLint("MissingPermission")
 fun startVideo(
     activity: ComponentActivity,
@@ -62,41 +69,41 @@ fun startVideo(
 ): Recording {
     val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
     val values = ContentValues().apply {
-        put(MediaStore.Video.Media.DISPLAY_NAME, "SCV_$stamp")
+        put(MediaStore.Video.Media.DISPLAY_NAME, "SCV_$stamp.mp4")
+        put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
         put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/SCameraPro")
     }
     val opts = MediaStoreOutputOptions.Builder(
-        activity.contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        activity.contentResolver,
+        MediaStore.Video.Media.EXTERNAL_CONTENT_URI
     ).setContentValues(values).build()
 
-    // AudioConfig живёт в androidx.camera.view.video (не в androidx.camera.video!)
-    val audioConfig = AudioConfig.create(withAudio)
-
-    return controller.startRecording(
+    var startSec = 0L
+    val pending = controller.startRecording(
         opts,
-        audioConfig,
+        if (withAudio) AudioConfig.create(true) else AudioConfig.AUDIO_DISABLED,
         ContextCompat.getMainExecutor(activity)
-    ) { ev: VideoRecordEvent ->
-        when (ev) {
-            is VideoRecordEvent.Status ->
-                onTick((ev.recordingStats.recordedDurationNanos / 1_000_000_000L).toInt())
-            is VideoRecordEvent.Finalize ->
-                onDone(if (ev.hasError()) null else ev.outputResults.outputUri)
-            else -> {}
+    ) { event ->
+        when (event) {
+            is VideoRecordEvent.Start -> {
+                startSec = System.currentTimeMillis()
+            }
+            is VideoRecordEvent.Status -> {
+                val elapsed = ((System.currentTimeMillis() - startSec) / 1000).toInt()
+                onTick(elapsed)
+            }
+            is VideoRecordEvent.Finalize -> {
+                if (!event.hasError()) {
+                    onDone(event.outputResults.outputUri)
+                } else {
+                    onDone(null)
+                }
+            }
         }
     }
+    return pending
 }
 
-/** Best effort: asks the camera for a fixed frame rate (30 or 60). */
-@OptIn(ExperimentalCamera2Interop::class)
-fun applyFps(controller: LifecycleCameraController, fps: Int) {
-    val cc = controller.cameraControl ?: return
-    val b = CaptureRequestOptions.Builder()
-    b.setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
-    Camera2CameraControl.from(cc).setCaptureRequestOptions(b.build())
-}
-
-/** "Video size" popup: UHD / FHD / HD and 60 / 30 fps (UHD and the front camera are 30 only). */
 @Composable
 fun VideoSizePanel(
     res: VideoRes,
@@ -107,63 +114,38 @@ fun VideoSizePanel(
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val fps60 = res != VideoRes.UHD && !frontCam
-    Column(
+    Row(
         modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .glass(RoundedCornerShape(26.dp), tint = Color(0x80202020))
-            .padding(16.dp)
+            .glass(RoundedCornerShape(20.dp))
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Размер видео", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.weight(1f))
-            Box(
-                Modifier.size(28.dp).clip(CircleShape).background(Color(0x33FFFFFF)).clickable(onClick = onClose),
-                contentAlignment = Alignment.Center
-            ) { CloseIcon(Modifier.size(11.dp)) }
+        VideoRes.values().forEach { r ->
+            Text(
+                r.label,
+                color = if (res == r) Accent else Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable { onRes(r); Vibro.click(modifier.javaClass.cast(null) ?: return@clickable) }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            )
         }
-        Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Размер", color = Muted, fontSize = 13.sp, modifier = Modifier.widthIn(min = 64.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                VideoRes.values().forEach { r -> Chip(r.label, r == res, true) { onRes(r) } }
-            }
+        Spacer(Modifier.size(1.dp, 16.dp).background(Color(0x44FFFFFF)))
+        listOf(30, 60).forEach { f ->
+            val enabled = !frontCam && res != VideoRes.UHD || f == 30
+            Text(
+                "${f}FPS",
+                color = if (fps == f) Accent else if (enabled) Color.White else Color.Gray,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(enabled = enabled) { onFps(f) }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            )
         }
-        Spacer(Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("FPS", color = Muted, fontSize = 13.sp, modifier = Modifier.widthIn(min = 64.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Chip("60", fps == 60, fps60) { onFps(60) }
-                Chip("30", fps == 30, true) { onFps(30) }
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            if (frontCam) "Фронтальная камера пишет только 30 fps"
-            else if (res == VideoRes.UHD) "UHD доступен только в 30 fps"
-            else "Full HD с плавной частотой кадров",
-            color = Color(0xCCFFFFFF), fontSize = 12.sp
-        )
-    }
-}
-
-@Composable
-private fun Chip(text: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .alpha(if (enabled) 1f else 0.35f)
-            .clip(RoundedCornerShape(18.dp))
-            .background(if (selected) PillSelected else Color.Transparent)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text,
-            color = if (selected) Accent else Color.White,
-            fontSize = 15.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-        )
     }
 }
