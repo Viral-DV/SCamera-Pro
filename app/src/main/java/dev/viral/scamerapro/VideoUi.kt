@@ -10,7 +10,6 @@ import androidx.activity.ComponentActivity
 import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
-import androidx.camera.video.AudioConfig
 import androidx.camera.video.MediaStoreOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.Recording
@@ -70,7 +69,6 @@ fun startVideo(
     ).setContentValues(values).build()
     return controller.startRecording(
         opts,
-        AudioConfig.create(withAudio),
         ContextCompat.getMainExecutor(activity)
     ) { ev ->
         when (ev) {
