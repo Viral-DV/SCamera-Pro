@@ -27,14 +27,13 @@ object Dims {
 enum class Mode(val label: String) {
     PORTRAIT("ПОРТРЕТ"),
     PHOTO("ФОТОГРАФИЯ"),
-    GRAND("GRAND"),
     VIDEO("ВИДЕОЗАПИСЬ"),
     MORE("ЕЩЕ"),
     PRO("ПРО")
 }
 
-/** Modes shown in the swipe strip (PRO is entered from the "More" sheet). */
-val carouselModes = listOf(Mode.PORTRAIT, Mode.PHOTO, Mode.GRAND, Mode.VIDEO, Mode.MORE)
+/** Modes shown in the swipe strip (GRAND removed, Solar-Mode moved to moon icon top-right). */
+val carouselModes = listOf(Mode.PORTRAIT, Mode.PHOTO, Mode.VIDEO, Mode.MORE)
 
 enum class FrameRatio(val label: String) {
     R34("3:4"),
