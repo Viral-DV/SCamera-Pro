@@ -1,13 +1,30 @@
 package dev.viral.scamerapro
 
 import android.content.Context
-import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.os.Build
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import java.util.Locale
 
-/** Text report of the cameras Android exposes to this app (to find ultrawide / 50 MP access). */
 fun cameraReport(context: Context): String {
     val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     val sb = StringBuilder()
@@ -30,33 +47,48 @@ fun cameraReport(context: Context): String {
             if (apertures != null) {
                 sb.appendLine("  aperture: " + apertures.joinToString { String.format(Locale.US, "f/%.1f", it) })
             }
-            val px = c.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
-            if (px != null) sb.appendLine("  sensor: ${px.width}x${px.height}")
-            if (Build.VERSION.SDK_INT >= 30) {
-                val zr = c.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
-                if (zr != null) sb.appendLine("  zoom ratio: ${zr.lower} .. ${zr.upper}")
-            }
-            if (Build.VERSION.SDK_INT >= 28) {
-                val phys = c.physicalCameraIds
-                if (phys.isNotEmpty()) sb.appendLine("  physical ids: " + phys.joinToString())
-            }
-            if (Build.VERSION.SDK_INT >= 31) {
-                val maxMap = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION)
-                val big = maxMap?.getOutputSizes(ImageFormat.JPEG)
-                    ?.maxByOrNull { it.width.toLong() * it.height }
-                sb.appendLine(
-                    if (big != null) "  max-res JPEG: ${big.width}x${big.height}"
-                    else "  max-res mode: not exposed"
-                )
-            }
-            val sizes = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-                ?.getOutputSizes(ImageFormat.JPEG)
-                ?.maxByOrNull { it.width.toLong() * it.height }
-            if (sizes != null) sb.appendLine("  default max JPEG: ${sizes.width}x${sizes.height}")
         } catch (e: Exception) {
             sb.appendLine("ID $id: error ${e.message}")
         }
         sb.appendLine()
     }
     return sb.toString()
+}
+
+@Composable
+fun DebugDialog(
+    lenses: LensInfo,
+    ultraAvail: Boolean,
+    camRatio: Float,
+    displayZoom: Float,
+    lens: Lens,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Camera Debug Info", fontWeight = FontWeight.Bold) },
+        text = {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .background(Color(0xFF1E1E1E), RoundedCornerShape(8.dp))
+                    .padding(12.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Active Lens: $lens", color = Color.Green, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                    Text("Ultra Available: $ultraAvail", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                    Text("Main ID: ${lenses.mainId}", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                    Text("Ultra ID: ${lenses.ultraId}", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                    Text("Camera Ratio: $camRatio", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                    Text("Display Zoom: $displayZoom", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("OK", color = Accent)
+            }
+        }
+    )
 }
