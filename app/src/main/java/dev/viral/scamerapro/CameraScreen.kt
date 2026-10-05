@@ -204,6 +204,30 @@ fun CameraScreen() {
     val zoom by controller.zoomState.observeAsState()
     val camRatio = zoom?.zoomRatio ?: 1f
 
+    // Check ultrawide availability
+    LaunchedEffect(zoom) {
+        if (!ultraChecked && zoom != null) {
+            ultraChecked = true
+            val maxR = zoom?.maxZoomRatio ?: 10f
+            mainMax = maxR
+            if (lenses.ultraId != null) {
+                try {
+                    controller.cameraSelector = selectorForId(lenses.ultraId)
+                    delay(120)
+                    val uMax = controller.zoomState.value?.maxZoomRatio ?: 1f
+                    if (uMax > 1.1f) ultraAvail = true
+                } catch (_: Exception) {
+                } finally {
+                    try {
+                        controller.cameraSelector =
+                            if (lenses.mainId != null) selectorForId(lenses.mainId) else CameraSelector.DEFAULT_BACK_CAMERA
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        }
+    }
+
     // ---------- general UI state ----------
     var flashOn by remember { mutableStateOf(false) }
     var backCamera by remember { mutableStateOf(true) }
@@ -383,6 +407,16 @@ fun CameraScreen() {
     var rulerPos by remember { mutableFloatStateOf(0f) }
     val evStep = controller.cameraInfo?.exposureState?.exposureCompensationStep?.toFloat() ?: 0f
     val evRange = controller.cameraInfo?.exposureState?.exposureCompensationRange
+
+    LaunchedEffect(controller.cameraInfo) {
+        val info = controller.cameraInfo ?: return@LaunchedEffect
+        ranges = ProRanges(
+            iso = readIsoRange(info),
+            shutter = readShutterRange(info),
+            ev = info.exposureState.exposureCompensationRange,
+            evStep = info.exposureState.exposureCompensationStep.toFloat()
+        )
+    }
 
     // Focus & view bounds
     val pv = remember { arrayOfNulls<PreviewView>(1) }
@@ -653,6 +687,35 @@ fun CameraScreen() {
                     }
                 }
 
+                // OCR Text Scanner Button
+                if (tScale > 0.01f) {
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 18.dp, bottom = 18.dp)
+                            .graphicsLayer { scaleX = tScale; scaleY = tScale; alpha = tScale }
+                            .glass(RoundedCornerShape(18.dp))
+                            .clickable {
+                                Vibro.click(context)
+                                showText = true
+                            }
+                            .padding(horizontal = 14.dp, vertical = 9.dp)
+                    ) {
+                        Text("Текст", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                // Countdown Toast
+                if (countdown > 0) {
+                    Text(
+                        "$countdown",
+                        color = Color.White,
+                        fontSize = 72.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+
                 // Toast pill
                 toast?.let { t ->
                     Text(
@@ -676,6 +739,43 @@ fun CameraScreen() {
                     .fillMaxWidth()
                     .height(with(density) { topBarH.toDp() })
             ) {
+                if (mode == Mode.VIDEO) {
+                    Box(Modifier.align(Alignment.BottomStart).padding(start = 18.dp, bottom = 10.dp)) {
+                        Row(
+                            Modifier
+                                .glass(RoundedCornerShape(14.dp))
+                                .clickable { Vibro.click(context); showVideoSize = !showVideoSize }
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("${videoRes.label} / $effFps", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                } else {
+                    Row(
+                        Modifier.align(Alignment.BottomStart).padding(start = 18.dp, bottom = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        RatioPill(ratio = ratio, onClick = {
+                            Vibro.click(context)
+                            ratio = when (ratio) {
+                                FrameRatio.R34 -> FrameRatio.R916
+                                FrameRatio.R916 -> FrameRatio.R11
+                                FrameRatio.R11 -> FrameRatio.FULL
+                                FrameRatio.FULL -> FrameRatio.R34
+                            }
+                        })
+                        TimerPill(sec = timerSec, onClick = {
+                            Vibro.click(context)
+                            timerSec = when (timerSec) {
+                                0 -> 3
+                                3 -> 10
+                                else -> 0
+                            }
+                        })
+                    }
+                }
+
                 Row(
                     Modifier.align(Alignment.BottomEnd).padding(end = 22.dp, bottom = 9.dp).alpha(controlsAlpha),
                     horizontalArrangement = Arrangement.spacedBy(20.dp),
@@ -688,6 +788,69 @@ fun CameraScreen() {
                             solarMode = !solarMode
                             Vibro.click(context)
                             showToast(if (solarMode) "Solar-Mode (30x Moon AI) активен" else "Solar-Mode отключен")
+                        }
+                    )
+                    BugIcon(modifier = Modifier.size(Dims.topIcon).clickable { Vibro.click(context); showDebug = true })
+                }
+            }
+
+            // ===== Video Settings Dropdown =====
+            if (showVideoSize && mode == Mode.VIDEO) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .padding(top = with(density) { topBarH.toDp() } + 4.dp, start = 18.dp)
+                        .glass(RoundedCornerShape(16.dp))
+                        .padding(10.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            VideoRes.values().forEach { r ->
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(if (videoRes == r) Accent else Color(0x33FFFFFF))
+                                        .clickable { Vibro.click(context); videoRes = r }
+                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Text(r.label, color = if (videoRes == r) Color.Black else Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(30, 60).forEach { f ->
+                                val dis = !backCamera || videoRes == VideoRes.UHD
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(if (effFps == f) Accent else Color(0x33FFFFFF))
+                                        .clickable(enabled = !dis || f == 30) { Vibro.click(context); videoFps = f }
+                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Text("$f FPS", color = if (effFps == f) Color.Black else Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ===== Pro Controls Row =====
+            if (mode == Mode.PRO) {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 160.dp)
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                ) {
+                    ProPanel(
+                        pro = pro,
+                        ranges = ranges,
+                        selected = proParam,
+                        onSelectParam = { p ->
+                            Vibro.click(context)
+                            proParam = if (proParam == p) null else p
                         }
                     )
                 }
@@ -745,7 +908,61 @@ fun CameraScreen() {
                                 onClose = { Vibro.click(context); zoomExpanded = false }
                             )
 
-                            else -> Spacer(Modifier.height(1.dp))
+                            RowState.QUICK -> QuickSettingsRow(
+                                flashOn = flashOn,
+                                timerSec = timerSec,
+                                ratio = ratio,
+                                solarActive = solarMode,
+                                onFlashToggle = toggleFlash,
+                                onTimerToggle = {
+                                    timerSec = when (timerSec) {
+                                        0 -> 3
+                                        3 -> 10
+                                        else -> 0
+                                    }
+                                },
+                                onRatioToggle = {
+                                    ratio = when (ratio) {
+                                        FrameRatio.R34 -> FrameRatio.R916
+                                        FrameRatio.R916 -> FrameRatio.R11
+                                        FrameRatio.R11 -> FrameRatio.FULL
+                                        FrameRatio.FULL -> FrameRatio.R34
+                                    }
+                                },
+                                onSolarToggle = {
+                                    solarMode = !solarMode
+                                    showToast(if (solarMode) "Solar-Mode (30x Moon AI) активен" else "Solar-Mode отключен")
+                                },
+                                onClose = { quickOpen = false }
+                            )
+
+                            RowState.PRO_RULER -> proParam?.let { param ->
+                                ProRuler(
+                                    param = param,
+                                    pro = pro,
+                                    ranges = ranges,
+                                    controller = controller,
+                                    onClose = { proParam = null }
+                                )
+                            }
+
+                            RowState.FRONT -> Row(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    Modifier
+                                        .glass(RoundedCornerShape(20.dp))
+                                        .clickable {
+                                            Vibro.click(context)
+                                            selfieGroup = !selfieGroup
+                                            setDisplayZoom(if (selfieGroup) 0.8f else 1f)
+                                        }
+                                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                                ) {
+                                    Text(if (selfieGroup) "Групповое" else "1x", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
                         }
                     }
                 }
@@ -791,6 +1008,68 @@ fun CameraScreen() {
                 Spacer(Modifier.height(6.dp))
                 ModeCarousel(selected = mode, onSelect = { Vibro.click(context); mode = it })
             }
+
+            // ===== Debug Dialog =====
+            if (showDebug) {
+                DebugDialog(
+                    lenses = lenses,
+                    ultraAvail = ultraAvail,
+                    camRatio = camRatio,
+                    displayZoom = displayZoom,
+                    lens = lens,
+                    onDismiss = { showDebug = false }
+                )
+            }
+
+            // ===== OCR Text Dialog =====
+            if (showText) {
+                TextModal(text = lastText, onDismiss = { showText = false }, onCopy = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Scanned Text", lastText))
+                    showToast("Скопировано")
+                    showText = false
+                })
+            }
+        }
+    }
+}
+
+// ===== Quick Settings Bar UI =====
+
+@Composable
+private fun QuickSettingsRow(
+    flashOn: Boolean,
+    timerSec: Int,
+    ratio: FrameRatio,
+    solarActive: Boolean,
+    onFlashToggle: () -> Unit,
+    onTimerToggle: () -> Unit,
+    onRatioToggle: () -> Unit,
+    onSolarToggle: () -> Unit,
+    onClose: () -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .glass(RoundedCornerShape(22.dp))
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        BoltIcon(on = flashOn, modifier = Modifier.size(22.dp).clickable { onFlashToggle() })
+        TimerPill(sec = timerSec, onClick = onTimerToggle)
+        RatioPill(ratio = ratio, onClick = onRatioToggle)
+        MoonIcon(active = solarActive, modifier = Modifier.size(22.dp).clickable { onSolarToggle() })
+        Box(
+            Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(Color(0x33FFFFFF))
+                .clickable { onClose() },
+            contentAlignment = Alignment.Center
+        ) {
+            Text("✕", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -953,6 +1232,30 @@ private fun intColor(a: Int, r: Int, g: Int, b: Int): Int {
 
 // Helpers
 @Composable
+private fun RatioPill(ratio: FrameRatio, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .glass(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 5.dp)
+    ) {
+        Text(ratio.label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun TimerPill(sec: Int, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .glass(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 5.dp)
+    ) {
+        Text(if (sec == 0) "OFF" else "${sec}s", color = if (sec > 0) Accent else Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
 private fun DotsButtonSmall(modifier: Modifier, onClick: () -> Unit) {
     Box(modifier.size(Dims.dots).glass(CircleShape).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
         DotsIcon(Modifier.size(15.dp))
@@ -969,7 +1272,7 @@ private fun Shutter(isVideo: Boolean, recording: Boolean, onClick: () -> Unit) {
             .size(Dims.shutter)
             .scale(s)
             .clip(CircleShape)
-            .background(Color(0xFFF8F8F5))
+            .background(if (isVideo && recording) Color.Red else Color(0xFFF8F8F5))
             .clickable(interactionSource = src, indication = null, onClick = onClick)
     )
 }
@@ -998,6 +1301,25 @@ private fun takePhoto(activity: ComponentActivity, controller: LifecycleCameraCo
             override fun onError(exception: ImageCaptureException) {
                 Log.e("SCameraPro", "capture failed", exception)
             }
+        }
+    )
+}
+
+@Composable
+private fun TextModal(text: String, onDismiss: () -> Unit, onCopy: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Распознанный текст", fontWeight = FontWeight.Bold) },
+        text = {
+            Box(Modifier.verticalScroll(rememberScrollState())) {
+                Text(text, fontSize = 14.sp)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onCopy) { Text("Скопировать", color = Accent) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Закрыть", color = Color.Gray) }
         }
     )
 }
