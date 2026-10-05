@@ -9,6 +9,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -17,8 +18,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import kotlin.math.cos
 import kotlin.math.sin
-
-// Minimal white vector icons drawn with Canvas (no image assets needed).
 
 fun DrawScope.drawSun(c: Offset, r: Float, color: Color, stroke: Float) {
     drawCircle(color, radius = r * 0.42f, center = c)
@@ -32,6 +31,28 @@ fun DrawScope.drawSun(c: Offset, r: Float, color: Color, stroke: Float) {
             Offset(c.x + dx * r, c.y + dy * r),
             strokeWidth = stroke,
             cap = StrokeCap.Round
+        )
+    }
+}
+
+@Composable
+fun MoonIcon(active: Boolean, modifier: Modifier = Modifier, color: Color = Color.White) {
+    Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        val mainCircle = Path().apply {
+            addOval(Rect(0f, 0f, w, h))
+        }
+        val clipCircle = Path().apply {
+            addOval(Rect(w * 0.3f, -h * 0.1f, w * 1.2f, h * 0.9f))
+        }
+        val moonPath = Path().apply {
+            op(mainCircle, clipCircle, PathOperation.Difference)
+        }
+        drawPath(
+            path = moonPath,
+            color = if (active) Accent else color,
+            style = Fill
         )
     }
 }
