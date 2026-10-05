@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import androidx.camera.video.AudioConfig
 import androidx.camera.video.MediaStoreOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.Recording
@@ -68,11 +69,12 @@ fun startVideo(
         activity.contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI
     ).setContentValues(values).build()
 
-    // Настраиваем запись звука в самом контроллере перед стартом
-    controller.isAudioEnabled = withAudio
+    // AudioConfig управляет записью звука (в CameraX 1.4.x нет флага на контроллере)
+    val audioConfig = AudioConfig.create(withAudio)
 
     return controller.startRecording(
         opts,
+        audioConfig,
         ContextCompat.getMainExecutor(activity)
     ) { ev: VideoRecordEvent ->
         when (ev) {
