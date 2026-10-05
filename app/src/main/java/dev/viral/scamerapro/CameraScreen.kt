@@ -848,7 +848,7 @@ fun CameraScreen() {
                         pro = pro,
                         ranges = ranges,
                         selected = proParam,
-                        onSelectParam = { p ->
+                        onSelectParam = { p: ProParam? ->
                             Vibro.click(context)
                             proParam = if (proParam == p) null else p
                         }
