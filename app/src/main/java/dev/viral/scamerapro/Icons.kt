@@ -16,15 +16,13 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
-import kotlin.math.cos
-import kotlin.math.sin
 
 fun DrawScope.drawSun(c: Offset, r: Float, color: Color, stroke: Float) {
     drawCircle(color, radius = r * 0.42f, center = c)
     for (i in 0 until 8) {
         val a = Math.toRadians(i * 45.0)
-        val dx = cos(a).toFloat()
-        val dy = sin(a).toFloat()
+        val dx = Math.cos(a).toFloat()
+        val dy = Math.sin(a).toFloat()
         drawLine(
             color,
             Offset(c.x + dx * r * 0.68f, c.y + dy * r * 0.68f),
@@ -99,8 +97,8 @@ fun GearIcon(modifier: Modifier = Modifier, color: Color = Color.White) {
         drawCircle(color, radius = r * 0.62f, center = c, style = Stroke(sw))
         for (i in 0 until 8) {
             val a = Math.toRadians(i * 45.0)
-            val dx = cos(a).toFloat()
-            val dy = sin(a).toFloat()
+            val dx = Math.cos(a).toFloat()
+            val dy = Math.sin(a).toFloat()
             drawLine(
                 color,
                 Offset(c.x + dx * r * 0.66f, c.y + dy * r * 0.66f),
@@ -165,12 +163,12 @@ fun FlipIcon(modifier: Modifier = Modifier, color: Color = Color.White) {
         drawArc(color, 20f, 140f, false, topLeft = tl, size = sz, style = Stroke(sw, cap = StrokeCap.Round))
         for (deg in listOf(340.0, 160.0)) {
             val a = Math.toRadians(deg)
-            val px = c.x + r * cos(a).toFloat()
-            val py = c.y + r * sin(a).toFloat()
-            val tx = -sin(a).toFloat()
-            val ty = cos(a).toFloat()
-            val nx = cos(a).toFloat()
-            val ny = sin(a).toFloat()
+            val px = c.x + r * Math.cos(a).toFloat()
+            val py = c.y + r * Math.sin(a).toFloat()
+            val tx = -Math.sin(a).toFloat()
+            val ty = Math.cos(a).toFloat()
+            val nx = Math.cos(a).toFloat()
+            val ny = Math.sin(a).toFloat()
             val len = r * 0.45f
             val wid = r * 0.36f
             val head = Path().apply {
@@ -248,5 +246,33 @@ fun BeautyIcon(modifier: Modifier = Modifier, color: Color = Color.White) {
         drawArc(color, 20f, 140f, false, topLeft = Offset(w * 0.34f, h * 0.55f), size = Size(w * 0.22f, h * 0.22f), style = Stroke(sw, cap = StrokeCap.Round))
         drawLine(color, Offset(w * 0.82f, h * 0.06f), Offset(w * 0.82f, h * 0.30f), sw, StrokeCap.Round)
         drawLine(color, Offset(w * 0.70f, h * 0.18f), Offset(w * 0.94f, h * 0.18f), sw, StrokeCap.Round)
+    }
+}
+
+@Composable
+fun BugIcon(modifier: Modifier = Modifier, color: Color = Color.White) {
+    Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        val sw = 1.6.dp.toPx()
+        
+        // Body & Head
+        drawCircle(color, radius = w * 0.18f, center = Offset(w * 0.5f, h * 0.3f), style = Stroke(sw))
+        drawRoundRect(
+            color,
+            topLeft = Offset(w * 0.28f, h * 0.42f),
+            size = Size(w * 0.44f, h * 0.45f),
+            cornerRadius = CornerRadius(w * 0.2f),
+            style = Stroke(sw)
+        )
+        drawLine(color, Offset(w * 0.5f, h * 0.42f), Offset(w * 0.5f, h * 0.87f), sw)
+
+        // Legs
+        drawLine(color, Offset(w * 0.12f, h * 0.48f), Offset(w * 0.28f, h * 0.52f), sw, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.72f, h * 0.52f), Offset(w * 0.88f, h * 0.48f), sw, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.12f, h * 0.65f), Offset(w * 0.28f, h * 0.65f), sw, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.72f, h * 0.65f), Offset(w * 0.88f, h * 0.65f), sw, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.15f, h * 0.82f), Offset(w * 0.28f, h * 0.78f), sw, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.72f, h * 0.78f), Offset(w * 0.85f, h * 0.82f), sw, StrokeCap.Round)
     }
 }
