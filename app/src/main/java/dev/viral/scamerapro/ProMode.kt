@@ -2,15 +2,19 @@ package dev.viral.scamerapro
 
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
+import android.util.Range
 import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import androidx.camera.core.CameraInfo
 import androidx.camera.view.LifecycleCameraController
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -36,6 +40,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln
@@ -45,7 +50,6 @@ import kotlin.math.roundToInt
 
 enum class ProParam { ISO, SHUTTER, EV, MF, WB }
 
-/** White balance is set through Android's AWB presets (nearest preset to the shown Kelvin). */
 val WB_PRESETS = listOf(
     2700 to CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT,
     4000 to CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT,
@@ -78,42 +82,48 @@ class ProState {
 }
 
 data class ProRanges(
-    val isoMin: Int,
-    val isoMax: Int,
-    val expMin: Long,
-    val expMax: Long,
-    val minFocus: Float
+    val iso: Range<Int>?,
+    val shutter: Range<Long>?,
+    val ev: Range<Int>?,
+    val evStep: Float
 )
 
 @OptIn(ExperimentalCamera2Interop::class)
-fun readRanges(controller: LifecycleCameraController): ProRanges? {
-    val info = controller.cameraInfo ?: return null
-    val c2 = Camera2CameraInfo.from(info)
-    val iso = c2.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) ?: return null
-    val exp = c2.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE) ?: return null
-    val minFocus = c2.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
-    return ProRanges(iso.lower, iso.upper, exp.lower, exp.upper, minFocus)
+fun readIsoRange(info: CameraInfo): Range<Int>? {
+    return runCatching {
+        val c2 = Camera2CameraInfo.from(info)
+        c2.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+    }.getOrNull()
+}
+
+@OptIn(ExperimentalCamera2Interop::class)
+fun readShutterRange(info: CameraInfo): Range<Long>? {
+    return runCatching {
+        val c2 = Camera2CameraInfo.from(info)
+        c2.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+    }.getOrNull()
 }
 
 fun isoOf(s: ProState, r: ProRanges): Int {
-    val a = ln(r.isoMin.toFloat())
-    val b = ln(r.isoMax.toFloat())
-    return exp(a + (b - a) * s.isoFrac).roundToInt().coerceIn(r.isoMin, r.isoMax)
+    val minI = r.iso?.lower ?: 100
+    val maxI = r.iso?.upper ?: 3200
+    val a = ln(minI.toFloat())
+    val b = ln(maxI.toFloat())
+    return exp(a + (b - a) * s.isoFrac).roundToInt().coerceIn(minI, maxI)
 }
 
 fun shutterNsOf(s: ProState, r: ProRanges): Long {
-    val lo = max(r.expMin, 125_000L).toFloat()
-    val hi = min(r.expMax, 1_000_000_000L).toFloat().coerceAtLeast(lo)
-    return exp(ln(lo) + (ln(hi) - ln(lo)) * s.shutterFrac).toLong()
+    val minS = max(r.shutter?.lower ?: 125_000L, 125_000L).toFloat()
+    val maxS = min(r.shutter?.upper ?: 1_000_000_000L, 1_000_000_000L).toFloat().coerceAtLeast(minS)
+    return exp(ln(minS) + (ln(maxS) - ln(minS)) * s.shutterFrac).toLong()
 }
 
 fun fmtShutter(ns: Long): String {
     val sec = ns / 1e9
-    return if (sec >= 0.5) String.format(java.util.Locale.US, "%.1fs", sec)
+    return if (sec >= 0.5) String.format(Locale.US, "%.1fs", sec)
     else "1/" + (1.0 / sec).roundToInt() + "s"
 }
 
-/** Pushes the manual values to the camera; with [enabled] = false everything goes back to auto. */
 @OptIn(ExperimentalCamera2Interop::class)
 fun applyPro(controller: LifecycleCameraController, s: ProState, r: ProRanges?, enabled: Boolean) {
     val cc = controller.cameraControl ?: return
@@ -124,10 +134,6 @@ fun applyPro(controller: LifecycleCameraController, s: ProState, r: ProRanges?, 
             b.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, isoOf(s, r))
             b.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, shutterNsOf(s, r))
         }
-        if (s.mfManual) {
-            b.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-            b.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, s.mfFrac * r.minFocus)
-        }
         if (s.wbIndex >= 0) {
             b.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, WB_PRESETS[s.wbIndex].second)
         }
@@ -135,39 +141,79 @@ fun applyPro(controller: LifecycleCameraController, s: ProState, r: ProRanges?, 
     Camera2CameraControl.from(cc).setCaptureRequestOptions(b.build())
 }
 
-/** Readout strip shown over the viewfinder in Pro mode. */
 @Composable
-fun ProBar(
-    state: ProState,
+fun ProPanel(
+    pro: ProState,
     ranges: ProRanges?,
-    evText: String,
     selected: ProParam?,
-    onSelect: (ProParam) -> Unit,
-    onReset: () -> Unit,
-    modifier: Modifier = Modifier
+    onSelectParam: (ProParam?) -> Unit
 ) {
-    val isoText = if (state.isoManual && ranges != null) isoOf(state, ranges).toString() else "AUTO"
-    val shText = if (state.shutterManual && ranges != null) fmtShutter(shutterNsOf(state, ranges)) else "AUTO"
-    val mfText = if (state.mfManual) "MF" else "AF"
-    val wbText = if (state.wbIndex >= 0) "${WB_PRESETS[state.wbIndex].first}K" else "AWB"
+    val isoText = if (pro.isoManual && ranges != null) isoOf(pro, ranges).toString() else "AUTO"
+    val shText = if (pro.shutterManual && ranges != null) fmtShutter(shutterNsOf(pro, ranges)) else "AUTO"
+    val evText = if (pro.evIndex == 0) "0" else String.format(Locale.US, "%+d", pro.evIndex)
+    val mfText = if (pro.mfManual) "MF" else "AF"
+    val wbText = if (pro.wbIndex >= 0) "${WB_PRESETS[pro.wbIndex].first}K" else "AWB"
 
     Row(
-        modifier
+        Modifier
             .glass(RoundedCornerShape(24.dp))
             .padding(horizontal = 10.dp, vertical = 6.dp),
-        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             "↺", color = Color.White, fontSize = 20.sp,
-            modifier = Modifier.clickable(onClick = onReset).padding(horizontal = 8.dp, vertical = 4.dp)
+            modifier = Modifier.clickable { pro.reset() }.padding(horizontal = 8.dp, vertical = 4.dp)
         )
-        ProItem("ISO", isoText, state.isoManual, selected == ProParam.ISO) { onSelect(ProParam.ISO) }
-        ProItem("", shText, state.shutterManual, selected == ProParam.SHUTTER) { onSelect(ProParam.SHUTTER) }
-        ProItem("", evText, state.evIndex != 0, selected == ProParam.EV) { onSelect(ProParam.EV) }
-        ProItem("", mfText, state.mfManual, selected == ProParam.MF) { onSelect(ProParam.MF) }
-        ProItem("WB", wbText, state.wbIndex >= 0, selected == ProParam.WB) { onSelect(ProParam.WB) }
+        ProItem("ISO", isoText, pro.isoManual, selected == ProParam.ISO) { onSelectParam(ProParam.ISO) }
+        ProItem("", shText, pro.shutterManual, selected == ProParam.SHUTTER) { onSelectParam(ProParam.SHUTTER) }
+        ProItem("EV", evText, pro.evIndex != 0, selected == ProParam.EV) { onSelectParam(ProParam.EV) }
+        ProItem("", mfText, pro.mfManual, selected == ProParam.MF) { onSelectParam(ProParam.MF) }
+        ProItem("WB", wbText, pro.wbIndex >= 0, selected == ProParam.WB) { onSelectParam(ProParam.WB) }
     }
+}
+
+@Composable
+fun ProRuler(
+    param: ProParam,
+    pro: ProState,
+    ranges: ProRanges?,
+    controller: LifecycleCameraController,
+    onClose: () -> Unit
+) {
+    var frac by mutableFloatStateOf(
+        when (param) {
+            ProParam.ISO -> pro.isoFrac
+            ProParam.SHUTTER -> pro.shutterFrac
+            ProParam.MF -> pro.mfFrac
+            else -> 0.5f
+        }
+    )
+
+    ValueRuler(
+        pos = frac * 100f,
+        total = 100,
+        major = 10,
+        onPos = { p ->
+            frac = p / 100f
+            when (param) {
+                ProParam.ISO -> {
+                    pro.isoFrac = frac
+                    pro.isoManual = true
+                }
+                ProParam.SHUTTER -> {
+                    pro.shutterFrac = frac
+                    pro.shutterManual = true
+                }
+                ProParam.MF -> {
+                    pro.mfFrac = frac
+                    pro.mfManual = true
+                }
+                else -> {}
+            }
+            applyPro(controller, pro, ranges, true)
+        }
+    )
 }
 
 @Composable
@@ -192,7 +238,6 @@ private fun ProItem(label: String, value: String, manual: Boolean, selected: Boo
     }
 }
 
-/** Ruler for Pro values: ticks scroll under a fixed yellow pointer, drag to change. */
 @Composable
 fun ValueRuler(
     pos: Float,
@@ -205,7 +250,7 @@ fun ValueRuler(
     val spacing = with(density) { 9.dp.toPx() }
     val posState by rememberUpdatedState(pos)
     val onPosState by rememberUpdatedState(onPos)
-    androidx.compose.foundation.layout.Box(
+    Box(
         modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
