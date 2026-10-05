@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import androidx.camera.video.AudioConfig
 import androidx.camera.video.MediaStoreOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.Recording
@@ -67,10 +68,14 @@ fun startVideo(
     val opts = MediaStoreOutputOptions.Builder(
         activity.contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI
     ).setContentValues(values).build()
+
+    val audioConfig = if (withAudio) AudioConfig.AUDIO_ENABLED else AudioConfig.AUDIO_DISABLED
+
     return controller.startRecording(
         opts,
+        audioConfig,
         ContextCompat.getMainExecutor(activity)
-    ) { ev ->
+    ) { ev: VideoRecordEvent ->
         when (ev) {
             is VideoRecordEvent.Status ->
                 onTick((ev.recordingStats.recordedDurationNanos / 1_000_000_000L).toInt())
