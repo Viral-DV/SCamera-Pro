@@ -145,6 +145,9 @@ fun CameraScreen() {
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
 
+    // ---------- Solar-Mode ----------
+    var solarMode by remember { mutableStateOf(false) }
+
     // ---------- lenses ----------
     val lenses = remember { runCatching { discoverLenses(context) }.getOrDefault(LensInfo(null, null, null)) }
     var ultraAvail by remember { mutableStateOf(false) }
@@ -215,7 +218,7 @@ fun CameraScreen() {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
     }
     val audioLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { audioOk = it }
-    val flipAngle by animateFloatAsState(flipRot, tween(260), label = "flip")
+    val flipAngle by animateFloatAsState(flipRot, spring(stiffness = 300f, dampingRatio = 0.75f), label = "flip")
     val controlsAlpha by animateFloatAsState(if (flipping) 0f else 1f, tween(150), label = "ctl")
 
     // ---------- toast ----------
@@ -226,13 +229,6 @@ fun CameraScreen() {
         if (toastN > 0) {
             delay(1800)
             toast = null
-        }
-    }
-    LaunchedEffect(mode) {
-        when (mode) {
-            Mode.GRAND -> showToast("GRAND появится на этапе 5")
-            Mode.VIDEO -> showToast("Видео появится на этапе 4")
-            else -> {}
         }
     }
 
@@ -253,10 +249,11 @@ fun CameraScreen() {
             QualitySelector.from(videoRes.quality, FallbackStrategy.lowerQualityOrHigherThan(Quality.SD))
     }
     LaunchedEffect(mode, videoFps, videoRes, backCamera) {
-        delay(900)
+        delay(400)
         if (mode == Mode.VIDEO) applyFps(controller, effFps)
     }
     val toggleFlash: () -> Unit = {
+        Vibro.click(context)
         flashOn = !flashOn
         if (mode == Mode.VIDEO) {
             controller.enableTorch(flashOn)
@@ -267,7 +264,6 @@ fun CameraScreen() {
     }
 
     // ---------- lens switching and display zoom ----------
-    // display zoom: main camera = its own ratio, ultrawide = 0.6 x its ratio
     val displayZoom = if (lens == Lens.ULTRA && backCamera) camRatio * 0.6f else camRatio
     val zMinDisp = if (ultraAvail && backCamera) 0.6f else (zoom?.minZoomRatio ?: 1f)
     LaunchedEffect(zoom) {
@@ -280,12 +276,12 @@ fun CameraScreen() {
             ultraChecked = true
             val id = lenses.ultraId
             ultraAvail = id != null &&
-                runCatching { controller.hasCamera(selectorForId(id)) }.getOrDefault(false)
+                    runCatching { controller.hasCamera(selectorForId(id)) }.getOrDefault(false)
         }
     }
     LaunchedEffect(pendingN) {
         if (pendingN > 0) {
-            delay(450)
+            delay(350)
             applyZoom(controller, pendingRatio)
         }
     }
@@ -301,6 +297,7 @@ fun CameraScreen() {
                 lens = to
                 pendingRatio = camR
                 pendingN++
+                Vibro.click(context)
             } catch (e: Exception) {
                 Log.e("SCameraPro", "lens switch failed", e)
                 showToast("Не удалось переключить объектив")
@@ -326,7 +323,7 @@ fun CameraScreen() {
         }
     }
 
-    // zoom panel (expanded two-level ruler)
+    // zoom panel
     var zoomExpanded by remember { mutableStateOf(false) }
     var expandTick by remember { mutableIntStateOf(0) }
     val touchZoom = { zoomExpanded = true; expandTick++ }
@@ -344,7 +341,7 @@ fun CameraScreen() {
             if (zs != null) {
                 val start = zs.zoomRatio
                 val end = target.coerceIn(zs.minZoomRatio, zs.maxZoomRatio)
-                val steps = 14
+                val steps = 12
                 for (i in 1..steps) {
                     val t = i / steps.toFloat()
                     val e = t * t * (3f - 2f * t)
@@ -355,6 +352,7 @@ fun CameraScreen() {
         }
     }
     val onPreset: (Float) -> Unit = { p ->
+        Vibro.click(context)
         zoomJob?.cancel()
         if (p < 1f) {
             if (lens != Lens.ULTRA) switchLens(Lens.ULTRA, 1f) else applyZoom(controller, 1f)
@@ -403,7 +401,7 @@ fun CameraScreen() {
         }
     }
     val focusAlpha by animateFloatAsState(
-        if (focusVisible || focusLocked) 1f else 0f, tween(220), label = "focusAlpha"
+        if (focusVisible || focusLocked) 1f else 0f, tween(200), label = "focusAlpha"
     )
     val travelPx = with(density) { 48.dp.toPx() }
 
@@ -439,23 +437,23 @@ fun CameraScreen() {
     val densityF = density.density
     val doFlip: () -> Unit = {
         if (!flipping) {
+            Vibro.click(context)
             flipping = true
             flipRot += 180f
             zoomExpanded = false
             scope.launch {
-                animate(0f, 1f, animationSpec = tween(220)) { t, _ -> flipY = t * 90f; flipBlur = t * 40f }
+                animate(0f, 1f, animationSpec = tween(180)) { t, _ -> flipY = t * 90f; flipBlur = t * 30f }
                 backCamera = !backCamera
                 lens = Lens.MAIN
                 controller.cameraSelector =
                     if (backCamera) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
-                // frame is edge-on (invisible) now: wait until the new camera really streams
-                delay(150)
+                delay(100)
                 var waited = 0
-                while (pv[0]?.previewStreamState?.value != PreviewView.StreamState.STREAMING && waited < 2000) {
-                    delay(50)
-                    waited += 50
+                while (pv[0]?.previewStreamState?.value != PreviewView.StreamState.STREAMING && waited < 1500) {
+                    delay(40)
+                    waited += 40
                 }
-                animate(1f, 0f, animationSpec = tween(260)) { t, _ -> flipY = -t * 90f; flipBlur = t * 40f }
+                animate(1f, 0f, animationSpec = tween(200)) { t, _ -> flipY = -t * 90f; flipBlur = t * 30f }
                 flipY = 0f
                 flipBlur = 0f
                 flipping = false
@@ -465,6 +463,7 @@ fun CameraScreen() {
 
     // ---------- shutter ----------
     val doCapture = {
+        Vibro.click(context)
         scope.launch {
             flashAnim.snapTo(0f)
             flashAnim.animateTo(1f, tween(40))
@@ -473,6 +472,7 @@ fun CameraScreen() {
         takePhoto(activity, controller) { uri -> lastUri = uri }
     }
     val onShutter: () -> Unit = {
+        Vibro.click(context)
         if (mode == Mode.VIDEO) {
             val rec = recording
             if (rec != null) {
@@ -491,6 +491,7 @@ fun CameraScreen() {
             countdownJob = scope.launch {
                 for (i in timerSec downTo 1) {
                     countdown = i
+                    Vibro.tick(context)
                     delay(1000)
                 }
                 countdown = 0
@@ -514,7 +515,7 @@ fun CameraScreen() {
         RowState.PRO_RULER -> 48.dp
         RowState.EXPANDED -> 128.dp
     }
-    val slotH by animateDpAsState(slotTarget, tween(260), label = "slot")
+    val slotH by animateDpAsState(slotTarget, spring(stiffness = 380f, dampingRatio = 0.8f), label = "slot")
 
     val textFound = textHits >= 2 && mode != Mode.VIDEO
     val tScale by animateFloatAsState(
@@ -554,7 +555,6 @@ fun CameraScreen() {
                     },
                     factory = { ctx ->
                         PreviewView(ctx).apply {
-                            // COMPATIBLE = TextureView: needed for the backdrop blur snapshots
                             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                             this.controller = controller
                             scaleType = PreviewView.ScaleType.FILL_CENTER
@@ -563,16 +563,17 @@ fun CameraScreen() {
                     }
                 )
 
-                // Shutter flash: opacity 0 -> 1 -> 0
+                // Shutter flash
                 Box(Modifier.fillMaxSize().graphicsLayer { alpha = flashAnim.value }.background(Color.Black))
 
-                // Gesture layer: tap = focus, long press = lock AE/AF, pinch = zoom
+                // Gesture layer
                 Box(
                     Modifier
                         .fillMaxSize()
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onLongPress = { o ->
+                                    Vibro.click(context)
                                     focusPt = o
                                     focusLocked = true
                                     focusN++
@@ -585,6 +586,7 @@ fun CameraScreen() {
                                     showToast("Фокус и экспозиция заблокированы")
                                 },
                                 onTap = { o ->
+                                    Vibro.tick(context)
                                     focusLocked = false
                                     focusPt = o
                                     focusN++
@@ -631,6 +633,7 @@ fun CameraScreen() {
                                         .coerceIn(r2.lower.toFloat(), r2.upper.toFloat())
                                     val after = evFloat.roundToInt()
                                     if (after != before) {
+                                        Vibro.tick(context)
                                         controller.cameraControl?.setExposureCompensationIndex(after)
                                         pro.evIndex = after
                                     }
@@ -641,7 +644,7 @@ fun CameraScreen() {
                     }
                 }
 
-                // Pro readouts over the bottom of the viewfinder
+                // Pro readouts
                 if (mode == Mode.PRO) {
                     ProBar(
                         state = pro,
@@ -649,6 +652,7 @@ fun CameraScreen() {
                         evText = String.format(Locale.US, "%+.1f", pro.evIndex * evStep),
                         selected = proParam,
                         onSelect = { p ->
+                            Vibro.click(context)
                             if (proParam == p) {
                                 proParam = null
                             } else {
@@ -663,6 +667,7 @@ fun CameraScreen() {
                             }
                         },
                         onReset = {
+                            Vibro.click(context)
                             pro.reset()
                             controller.cameraControl?.setExposureCompensationIndex(0)
                             evFloat = 0f
@@ -671,7 +676,7 @@ fun CameraScreen() {
                     )
                 }
 
-                // Text-scan "T" button: pops in when text is in view
+                // Text-scan button
                 if (tScale > 0.01f) {
                     Box(
                         Modifier
@@ -682,14 +687,14 @@ fun CameraScreen() {
                             .alpha(min(1f, tScale))
                             .clip(CircleShape)
                             .background(Accent)
-                            .clickable { showText = true },
+                            .clickable { Vibro.click(context); showText = true },
                         contentAlignment = Alignment.Center
                     ) {
                         Text("T", color = Color.Black, fontSize = 19.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 
-                // Self-timer countdown
+                // Timer countdown
                 if (countdown > 0) {
                     Text(
                         countdown.toString(),
@@ -740,7 +745,6 @@ fun CameraScreen() {
                 }
             }
 
-            // Soft scrim under the controls when the preview extends behind them
             if (overlayUi) {
                 Box(
                     Modifier
@@ -765,7 +769,7 @@ fun CameraScreen() {
             ) {
                 Row(
                     Modifier.align(Alignment.BottomEnd).padding(end = 22.dp, bottom = 9.dp).alpha(controlsAlpha),
-                    horizontalArrangement = Arrangement.spacedBy(22.dp),
+                    horizontalArrangement = Arrangement.spacedBy(20.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     BoltIcon(
@@ -780,7 +784,7 @@ fun CameraScreen() {
                             lineHeight = 14.sp,
                             fontWeight = FontWeight.Bold,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            modifier = Modifier.clickable { showVideoSize = true }
+                            modifier = Modifier.clickable { Vibro.click(context); showVideoSize = true }
                         )
                     } else {
                         Text(
@@ -788,14 +792,23 @@ fun CameraScreen() {
                             color = Color.White,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Medium,
-                            modifier = Modifier.clickable { showToast("50M недоступен: Samsung не открывает его сторонним приложениям") }
+                            modifier = Modifier.clickable { Vibro.click(context); showToast("50M недоступен: Samsung не открывает его сторонним приложениям") }
                         )
                     }
                     if (!backCamera) {
                         BeautyIcon(
-                            Modifier.size(Dims.topIcon).clickable { showToast("Эффекты для селфи появятся позже") }
+                            Modifier.size(Dims.topIcon).clickable { Vibro.click(context); showToast("Эффекты для селфи появятся позже") }
                         )
                     }
+                    // Solar-Mode (Lunar Icon)
+                    MoonIcon(
+                        active = solarMode,
+                        modifier = Modifier.size(20.dp).clickable {
+                            solarMode = !solarMode
+                            Vibro.click(context)
+                            showToast(if (solarMode) "Solar-Mode включен" else "Solar-Mode выключен")
+                        }
+                    )
                 }
             }
 
@@ -808,7 +821,6 @@ fun CameraScreen() {
                     .padding(bottom = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // One slot, five states: pill / expanded ruler / quick panel / Pro ruler / selfie modes
                 Box(
                     Modifier.fillMaxWidth().height(slotH).alpha(controlsAlpha),
                     contentAlignment = Alignment.BottomCenter
@@ -816,8 +828,8 @@ fun CameraScreen() {
                     AnimatedContent(
                         targetState = rowState,
                         transitionSpec = {
-                            (fadeIn(tween(220)) + scaleIn(tween(220), initialScale = 0.92f)) togetherWith
-                                fadeOut(tween(120))
+                            (fadeIn(tween(180)) + scaleIn(tween(180), initialScale = 0.95f)) togetherWith
+                                    fadeOut(tween(120))
                         },
                         contentAlignment = Alignment.BottomCenter,
                         label = "controlRow"
@@ -837,7 +849,10 @@ fun CameraScreen() {
                                         touchZoom()
                                     }
                                 )
-                                DotsButtonSmall(Modifier.align(Alignment.CenterEnd).padding(end = 26.dp)) { quickOpen = true }
+                                DotsButtonSmall(Modifier.align(Alignment.CenterEnd).padding(end = 26.dp)) {
+                                    Vibro.click(context)
+                                    quickOpen = true
+                                }
                             }
 
                             RowState.FRONT -> Box(Modifier.fillMaxWidth().height(44.dp), contentAlignment = Alignment.Center) {
@@ -845,14 +860,17 @@ fun CameraScreen() {
                                     Modifier.glass(RoundedCornerShape(30.dp)).padding(3.dp),
                                     horizontalArrangement = Arrangement.spacedBy(1.dp)
                                 ) {
-                                    SelfieChip(selected = !selfieGroup, onClick = { selfieGroup = false }) {
+                                    SelfieChip(selected = !selfieGroup, onClick = { Vibro.click(context); selfieGroup = false }) {
                                         PersonIcon(Modifier.size(20.dp))
                                     }
-                                    SelfieChip(selected = selfieGroup, onClick = { selfieGroup = true }) {
+                                    SelfieChip(selected = selfieGroup, onClick = { Vibro.click(context); selfieGroup = true }) {
                                         GroupIcon(Modifier.size(22.dp))
                                     }
                                 }
-                                DotsButtonSmall(Modifier.align(Alignment.CenterEnd).padding(end = 26.dp)) { quickOpen = true }
+                                DotsButtonSmall(Modifier.align(Alignment.CenterEnd).padding(end = 26.dp)) {
+                                    Vibro.click(context)
+                                    quickOpen = true
+                                }
                             }
 
                             RowState.EXPANDED -> ZoomExpanded(
@@ -861,24 +879,26 @@ fun CameraScreen() {
                                 maxZ = zMaxDisp,
                                 onZoom = { zoomJob?.cancel(); setDisplayZoom(it); touchZoom() },
                                 onPreset = { onPreset(it); touchZoom() },
-                                onClose = { zoomExpanded = false }
+                                onClose = { Vibro.click(context); zoomExpanded = false }
                             )
 
                             RowState.QUICK -> QuickPanel(
                                 flashOn = flashOn,
                                 timerSec = timerSec,
                                 ratio = ratio,
-                                onSettings = { quickOpen = false; showDebug = true },
+                                onSettings = { Vibro.click(context); quickOpen = false; showDebug = true },
                                 onFlash = { toggleFlash() },
                                 onTimer = {
+                                    Vibro.click(context)
                                     timerSec = when (timerSec) { 0 -> 2; 2 -> 5; 5 -> 10; else -> 0 }
                                 },
                                 onRatio = {
+                                    Vibro.click(context)
                                     val all = FrameRatio.values()
                                     ratio = all[(ratio.ordinal + 1) % all.size]
                                 },
-                                onRes = { showToast("50M недоступен на этом телефоне для сторонних приложений") },
-                                onClose = { quickOpen = false }
+                                onRes = { Vibro.click(context); showToast("50M недоступен на этом телефоне для сторонних приложений") },
+                                onClose = { Vibro.click(context); quickOpen = false }
                             )
 
                             RowState.PRO_RULER -> {
@@ -923,13 +943,13 @@ fun CameraScreen() {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Gallery thumbnail
                     Box(
                         Modifier
                             .size(Dims.thumb)
                             .clip(CircleShape)
                             .border(1.dp, Color(0x55FFFFFF), CircleShape)
                             .clickable(enabled = lastUri != null) {
+                                Vibro.click(context)
                                 lastUri?.let { u ->
                                     context.startActivity(
                                         Intent(Intent.ACTION_VIEW)
@@ -942,8 +962,8 @@ fun CameraScreen() {
                         AnimatedContent(
                             targetState = thumb,
                             transitionSpec = {
-                                (fadeIn(tween(260)) + scaleIn(tween(260), initialScale = 1.3f)) togetherWith
-                                    fadeOut(tween(200))
+                                (fadeIn(tween(200)) + scaleIn(tween(200), initialScale = 1.2f)) togetherWith
+                                        fadeOut(tween(150))
                             },
                             label = "thumb"
                         ) { bmp ->
@@ -960,7 +980,6 @@ fun CameraScreen() {
 
                     Shutter(isVideo = mode == Mode.VIDEO, recording = recording != null, onClick = onShutter)
 
-                    // Flip camera
                     Box(
                         Modifier
                             .size(Dims.flip)
@@ -975,32 +994,35 @@ fun CameraScreen() {
                 Spacer(Modifier.height(6.dp))
                 if (mode == Mode.PRO) {
                     Text(
-                        "‹   ПРО",
+                        "‹ ПРО",
                         color = Color.White,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier
                             .height(40.dp)
-                            .clickable { mode = Mode.PHOTO; proParam = null }
+                            .clickable { Vibro.click(context); mode = Mode.PHOTO; proParam = null }
                             .padding(horizontal = 24.dp, vertical = 10.dp)
                     )
                 } else {
-                    ModeCarousel(selected = mode, onSelect = { mode = it })
+                    ModeCarousel(selected = mode, onSelect = {
+                        Vibro.click(context)
+                        mode = it
+                    })
                 }
             }
 
-            // ===== "More" sheet =====
             AnimatedVisibility(
                 visible = mode == Mode.MORE,
                 modifier = Modifier.align(Alignment.BottomCenter),
-                enter = fadeIn(tween(220)) + slideInVertically(tween(260)) { it / 4 },
-                exit = fadeOut(tween(160)) + slideOutVertically(tween(200)) { it / 4 }
+                enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { it / 4 },
+                exit = fadeOut(tween(120)) + slideOutVertically(tween(160)) { it / 4 }
             ) {
                 MoreSheet(
                     onPick = { name ->
+                        Vibro.click(context)
                         if (name == "ПРО") mode = Mode.PRO else showToast("$name появится позже")
                     },
-                    onEdit = { showToast("Редактор режимов появится позже") },
+                    onEdit = { Vibro.click(context); showToast("Редактор режимов появится позже") },
                     modifier = Modifier.navigationBarsPadding().padding(bottom = 62.dp)
                 )
             }
@@ -1016,6 +1038,7 @@ fun CameraScreen() {
                     },
                     confirmButton = {
                         TextButton(onClick = {
+                            Vibro.click(context)
                             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                             cm.setPrimaryClip(ClipData.newPlainText("scan", lastText))
                             showText = false
@@ -1045,7 +1068,7 @@ fun CameraScreen() {
 
 @Composable
 private fun SelfieChip(selected: Boolean, onClick: () -> Unit, content: @Composable () -> Unit) {
-    val bg by animateFloatAsState(if (selected) 1f else 0f, tween(200), label = "selfieBg")
+    val bg by animateFloatAsState(if (selected) 1f else 0f, tween(180), label = "selfieBg")
     Box(
         Modifier
             .size(Dims.pillBtn + 10.dp, Dims.pillBtn)
@@ -1069,7 +1092,7 @@ private fun Shutter(isVideo: Boolean, recording: Boolean, onClick: () -> Unit) {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
     val s by animateFloatAsState(if (pressed) 0.88f else 1f, tween(90), label = "shutter")
-    val dot by animateDpAsState(if (recording) 26.dp else if (isVideo) 32.dp else 0.dp, tween(220), label = "shutterDot")
+    val dot by animateDpAsState(if (recording) 26.dp else if (isVideo) 32.dp else 0.dp, spring(stiffness = 380f, dampingRatio = 0.8f), label = "shutterDot")
     Box(
         Modifier
             .size(Dims.shutter)
