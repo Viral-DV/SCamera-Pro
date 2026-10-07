@@ -10,7 +10,10 @@ import androidx.activity.ComponentActivity
 import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
-import androidx.camera.video.MediaStoreOutputOptions
+import androidx.camera.video.FileOutputOptions
+import android.content.Context
+import android.os.Environment
+import java.io.File
 import androidx.camera.view.video.AudioConfig
 import androidx.camera.video.Quality
 import androidx.camera.video.Recording
@@ -51,7 +54,7 @@ enum class VideoRes(val label: String, val quality: Quality) {
     HD("HD", Quality.HD)
 }
 
-/** Starts recording into Movies/SCameraPro; [onDone] gets the saved video (or null on error). */
+/** Records into the app's own folder, then copies the finished video to Movies/SCameraPro. */
 @SuppressLint("MissingPermission")
 fun startVideo(
     activity: ComponentActivity,
@@ -60,14 +63,10 @@ fun startVideo(
     onTick: (Int) -> Unit,
     onDone: (Uri?, Int) -> Unit
 ): Recording {
-    val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-    val values = ContentValues().apply {
-        put(MediaStore.Video.Media.DISPLAY_NAME, "SCV_$stamp")
-        put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/SCameraPro")
-    }
-    val opts = MediaStoreOutputOptions.Builder(
-        activity.contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-    ).setContentValues(values).build()
+    val name = "SCV_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".mp4"
+    val dir = activity.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: activity.filesDir
+    val file = File(dir, name)
+    val opts = FileOutputOptions.Builder(file).build()
     return controller.startRecording(
         opts,
         AudioConfig.create(withAudio),
@@ -76,11 +75,41 @@ fun startVideo(
         when (ev) {
             is VideoRecordEvent.Status ->
                 onTick((ev.recordingStats.recordedDurationNanos / 1_000_000_000L).toInt())
-            is VideoRecordEvent.Finalize ->
-                onDone(if (ev.hasError()) null else ev.outputResults.outputUri, ev.error)
+            is VideoRecordEvent.Finalize -> {
+                if (ev.hasError()) {
+                    file.delete()
+                    onDone(null, ev.error)
+                } else {
+                    Thread {
+                        val uri = saveToGallery(activity, file, name)
+                        activity.runOnUiThread { onDone(uri, if (uri == null) -1 else 0) }
+                    }.start()
+                }
+            }
             else -> {}
         }
     }
+}
+
+private fun saveToGallery(ctx: Context, file: File, name: String): Uri? = try {
+    val values = ContentValues().apply {
+        put(MediaStore.Video.Media.DISPLAY_NAME, name)
+        put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+        put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/SCameraPro")
+        put(MediaStore.Video.Media.IS_PENDING, 1)
+    }
+    val uri = ctx.contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+    if (uri != null) {
+        ctx.contentResolver.openOutputStream(uri)?.use { out ->
+            file.inputStream().use { it.copyTo(out) }
+        }
+        val done = ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }
+        ctx.contentResolver.update(uri, done, null, null)
+        file.delete()
+    }
+    uri
+} catch (e: Exception) {
+    null
 }
 
 /** Best effort: asks the camera for a fixed frame rate (30 or 60). */
