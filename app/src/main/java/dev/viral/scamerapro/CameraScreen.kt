@@ -15,6 +15,7 @@ import android.util.Log
 import android.view.View
 import androidx.activity.ComponentActivity
 import android.Manifest
+import androidx.compose.ui.draw.clipToBounds
 import android.view.HapticFeedbackConstants
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.graphics.Path
@@ -282,12 +283,14 @@ fun CameraScreen() {
 
     // ---------- lens switching and display zoom ----------
     // display zoom: main camera = its own ratio, ultrawide = 0.6 x its ratio
-    val displayZoom = if (lens == Lens.ULTRA && backCamera) camRatio * 0.6f else camRatio
+    var digitalExtra by remember { mutableFloatStateOf(1f) }
+    val displayZoom = (if (lens == Lens.ULTRA && backCamera) camRatio * 0.6f else camRatio) * digitalExtra
     val zMinDisp = if (ultraAvail && backCamera) 0.6f else (zoom?.minZoomRatio ?: 1f)
     LaunchedEffect(zoom) {
         if (lens == Lens.MAIN && backCamera) zoom?.let { mainMax = it.maxZoomRatio }
     }
-    val zMaxDisp = if (lens == Lens.MAIN || !backCamera) (zoom?.maxZoomRatio ?: mainMax) else mainMax
+    val hwMax = if (lens == Lens.MAIN || !backCamera) (zoom?.maxZoomRatio ?: mainMax) else mainMax
+    val zMaxDisp = if (backCamera) max(hwMax, 30f) else hwMax
 
     LaunchedEffect(zoom == null) {
         if (zoom != null && !ultraChecked) {
@@ -313,6 +316,7 @@ fun CameraScreen() {
                 controller.cameraSelector =
                     if (id != null) selectorForId(id) else CameraSelector.DEFAULT_BACK_CAMERA
                 lens = to
+                digitalExtra = 1f
                 pendingRatio = camR
                 pendingN++
             } catch (e: Exception) {
@@ -325,11 +329,12 @@ fun CameraScreen() {
 
     fun liveDisplay(): Float {
         val r = controller.zoomState.value?.zoomRatio ?: 1f
-        return if (lens == Lens.ULTRA && backCamera) r * 0.6f else r
+        return (if (lens == Lens.ULTRA && backCamera) r * 0.6f else r) * digitalExtra
     }
 
     val setDisplayZoom: (Float) -> Unit = { r0 ->
         val r = r0.coerceIn(zMinDisp, zMaxDisp)
+        digitalExtra = if (backCamera && lens == Lens.MAIN && r > hwMax) r / hwMax else 1f
         val zs = (r * 10).roundToInt()
         val tNow = SystemClock.elapsedRealtime()
         if (zs != lastZStep && tNow - lastZTime > 35) {
@@ -377,11 +382,14 @@ fun CameraScreen() {
     }
     val onPreset: (Float) -> Unit = { p ->
         buzz(HapticFeedbackConstants.CONTEXT_CLICK)
+        digitalExtra = 1f
         zoomJob?.cancel()
         if (p < 1f) {
             if (lens != Lens.ULTRA) switchLens(Lens.ULTRA, 1f) else applyZoom(controller, 1f)
         } else if (lens == Lens.ULTRA && backCamera) {
             switchLens(Lens.MAIN, p)
+        } else if (p > hwMax) {
+            setDisplayZoom(p)
         } else {
             animateZoomTo(p)
         }
@@ -468,6 +476,7 @@ fun CameraScreen() {
                 animate(0f, 1f, animationSpec = tween(220)) { t, _ -> flipY = -t * 90f; flipBlur = t * 28f }
                 backCamera = !backCamera
                 lens = Lens.MAIN
+                digitalExtra = 1f
                 controller.cameraSelector =
                     if (backCamera) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
                 // frame is edge-on (invisible) now: wait until the new camera really streams
@@ -492,7 +501,17 @@ fun CameraScreen() {
             flashAnim.animateTo(1f, tween(40))
             flashAnim.animateTo(0f, tween(120))
         }
-        takePhoto(activity, controller) { uri -> lastUri = uri }
+        val f = digitalExtra
+        takePhoto(activity, controller) { uri ->
+            if (f > 1.01f) {
+                Thread {
+                    digitalCrop(activity, uri, f)
+                    activity.runOnUiThread { lastUri = uri }
+                }.start()
+            } else {
+                lastUri = uri
+            }
+        }
     }
     val onShutter: () -> Unit = {
         buzz(HapticFeedbackConstants.CONTEXT_CLICK)
@@ -572,12 +591,15 @@ fun CameraScreen() {
                 Modifier
                     .offset { IntOffset(0, previewTop.roundToInt()) }
                     .size(with(density) { screenW.toDp() }, with(density) { previewH.toDp() })
+                    .clipToBounds()
                     .onSizeChanged { vfSize = it }
                     .onGloballyPositioned { glass.value = glass.value.copy(rect = it.boundsInRoot()) }
             ) {
                 AndroidView(
                     modifier = Modifier.fillMaxSize().graphicsLayer {
                         rotationX = flipY
+                        scaleX = digitalExtra
+                        scaleY = digitalExtra
                         cameraDistance = 12f * densityF
                         renderEffect = if (flipBlur > 0.5f) BlurEffect(flipBlur, flipBlur, TileMode.Clamp) else null
                     },
