@@ -43,7 +43,7 @@ import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.roundToInt
 
-private val AllPresets = listOf(0.6f, 1f, 2f, 4f, 8f, 10f)
+private val AllPresets = listOf(0.6f, 1f, 2f, 4f, 8f, 15f, 30f)
 
 fun presetsIn(min: Float, max: Float, base: List<Float> = AllPresets): List<Float> =
     base.filter { it >= min - 0.05f && it <= max + 0.05f }
