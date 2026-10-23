@@ -167,6 +167,9 @@ fun CameraScreen() {
 
     // ---------- text scan ----------
     var textHits by remember { mutableIntStateOf(0) }
+    var solarMode by remember { mutableStateOf(false) }
+    var moon by remember { mutableStateOf<MoonHit?>(null) }
+    var moonMiss by remember { mutableIntStateOf(0) }
     var lastText by remember { mutableStateOf("") }
     var showText by remember { mutableStateOf(false) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
@@ -181,7 +184,20 @@ fun CameraScreen() {
             setImageAnalysisBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             setImageAnalysisAnalyzer(
                 analysisExecutor,
-                TextScanAnalyzer { t ->
+                CameraAnalyzer({ solarMode }, { hit ->
+                    if (hit != null) {
+                        moonMiss = 0
+                        val p = moon
+                        moon = if (p == null) hit else MoonHit(
+                            p.cx + (hit.cx - p.cx) * 0.35f,
+                            p.cy + (hit.cy - p.cy) * 0.35f,
+                            p.r + (hit.r - p.r) * 0.35f
+                        )
+                    } else {
+                        moonMiss++
+                        if (moonMiss > 10) moon = null
+                    }
+                }) { t ->
                     val found = t.trim().length >= 8
                     textHits = if (found) min(textHits + 1, 3) else 0
                     if (found) lastText = t.trim()
@@ -215,7 +231,6 @@ fun CameraScreen() {
     var selfieGroup by remember { mutableStateOf(false) }
     var flipY by remember { mutableFloatStateOf(0f) }
     var flipBlur by remember { mutableFloatStateOf(0f) }
-    var solarMode by remember { mutableStateOf(false) }
     val flashAnim = remember { Animatable(0f) }
     var videoRes by remember { mutableStateOf(VideoRes.FHD) }
     var videoFps by remember { mutableIntStateOf(60) }
@@ -569,6 +584,13 @@ fun CameraScreen() {
         if (textFound) 1f else 0f, spring(dampingRatio = 0.55f, stiffness = 380f), label = "tBtn"
     )
 
+    val moonLocked = solarMode && moon != null
+    LaunchedEffect(solarMode) { if (!solarMode) { moon = null; moonMiss = 0 } }
+    LaunchedEffect(moonLocked) { delay(150); applyMoonExposure(controller, moonLocked, ranges) }
+    LaunchedEffect(moon != null) {
+        if (solarMode && moon != null) showToast("Луна найдена, экспозиция зафиксирована")
+    }
+
     CompositionLocalProvider(LocalGlass provides glass) {
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
             val screenW = constraints.maxWidth.toFloat()
@@ -613,6 +635,23 @@ fun CameraScreen() {
                         }
                     }
                 )
+
+                // Moon ring (debug): follows the detected Moon
+                val mh = moon
+                if (solarMode && mh != null) {
+                    androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                        val c = Offset(
+                            size.width / 2f + (mh.cx - 0.5f) * size.width * digitalExtra,
+                            size.height / 2f + (mh.cy - 0.5f) * size.height * digitalExtra
+                        )
+                        drawCircle(
+                            Color.White.copy(alpha = 0.85f),
+                            radius = mh.r * size.width * digitalExtra * 1.15f,
+                            center = c,
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(1.5.dp.toPx())
+                        )
+                    }
+                }
 
                 // Shutter flash: opacity 0 -> 1 -> 0
                 Box(Modifier.fillMaxSize().graphicsLayer { alpha = flashAnim.value }.background(Color.Black))
