@@ -40,8 +40,11 @@ object MoonDetect {
             }
         }
         val mean = (sum / (gw * gh)).toInt()
-        if (mean > 110) return null // not a dark sky
-        val thr = max(170, mean + 80)
+        var mx = 0
+        for (v in lum) if (v > mx) mx = v
+        // dark sky with a clearly brighter object; threshold adapts to the current exposure
+        if (mean > 90 || mx < 90 || mx - mean < 60) return null
+        val thr = max(70, mx * 6 / 10)
 
         val seen = BooleanArray(gw * gh)
         val stack = IntArray(gw * gh)
@@ -88,7 +91,7 @@ object MoonDetect {
         if (bestCount < 6 || bestCount > gw * gh * 35 / 100) return null
         val bw = bMaxX - bMinX + 1
         val bh = bMaxY - bMinY + 1
-        if (bestCount.toFloat() / (bw * bh) < 0.2f) return null
+        if (max(bw, bh) < 3 || bestCount.toFloat() / (bw * bh) < 0.3f) return null
 
         val u = (bSx.toFloat() / bestCount + 0.5f) / gw
         val v = (bSy.toFloat() / bestCount + 0.5f) / gh
