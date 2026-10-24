@@ -173,6 +173,7 @@ fun CameraScreen() {
     var moonHits by remember { mutableIntStateOf(0) }
     var solarZoomOk by remember { mutableStateOf(false) }
     var moonInfo by remember { mutableStateOf<MoonInfo?>(null) }
+    var moonPreview by remember { mutableStateOf<ImageBitmap?>(null) }
     var locOk by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED)
     }
@@ -607,6 +608,12 @@ fun CameraScreen() {
         }
         if (!solarMode) moonInfo = null
     }
+    LaunchedEffect(moonInfo) {
+        val mi = moonInfo
+        moonPreview = if (mi == null) null else withContext(Dispatchers.Default) {
+            MoonRender.render(context, mi, 128)?.asImageBitmap()
+        }
+    }
     LaunchedEffect(moonLocked) { delay(150); applyMoonExposure(controller, moonLocked, ranges) }
     LaunchedEffect(moon != null) {
         if (solarMode && moon != null) showToast("Луна найдена, экспозиция зафиксирована")
@@ -668,6 +675,15 @@ fun CameraScreen() {
                         fontSize = 12.sp,
                         modifier = Modifier.align(Alignment.TopStart).padding(12.dp)
                             .glass(RoundedCornerShape(12.dp)).padding(horizontal = 10.dp, vertical = 5.dp)
+                    )
+                }
+                val mp = moonPreview
+                if (solarMode && mp != null) {
+                    Image(
+                        bitmap = mp,
+                        contentDescription = null,
+                        modifier = Modifier.align(Alignment.TopStart).padding(top = 52.dp, start = 12.dp)
+                            .size(72.dp).clip(CircleShape).border(1.dp, Color(0x55FFFFFF), CircleShape)
                     )
                 }
                 // Moon ring (debug): follows the detected Moon
