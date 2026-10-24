@@ -172,6 +172,11 @@ fun CameraScreen() {
     var moonMiss by remember { mutableIntStateOf(0) }
     var moonHits by remember { mutableIntStateOf(0) }
     var solarZoomOk by remember { mutableStateOf(false) }
+    var moonInfo by remember { mutableStateOf<MoonInfo?>(null) }
+    var locOk by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED)
+    }
+    val locLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { locOk = it }
     var lastText by remember { mutableStateOf("") }
     var showText by remember { mutableStateOf(false) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
@@ -595,6 +600,13 @@ fun CameraScreen() {
     LaunchedEffect(solarMode, solarZoomOk) {
         if (!(solarMode && solarZoomOk)) { moon = null; moonMiss = 0; moonHits = 0 }
     }
+    LaunchedEffect(solarMode, locOk) {
+        while (solarMode && locOk) {
+            moonInfo = currentMoonInfo(context)
+            delay(10_000)
+        }
+        if (!solarMode) moonInfo = null
+    }
     LaunchedEffect(moonLocked) { delay(150); applyMoonExposure(controller, moonLocked, ranges) }
     LaunchedEffect(moon != null) {
         if (solarMode && moon != null) showToast("Луна найдена, экспозиция зафиксирована")
@@ -645,6 +657,19 @@ fun CameraScreen() {
                     }
                 )
 
+                val mi = moonInfo
+                if (solarMode && mi != null) {
+                    Text(
+                        String.format(
+                            Locale.US, "☾ %d%% %s, выс. %d°",
+                            (mi.illum * 100).roundToInt(), if (mi.waxing) "растёт" else "убывает", mi.altDeg.roundToInt()
+                        ),
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        modifier = Modifier.align(Alignment.TopStart).padding(12.dp)
+                            .glass(RoundedCornerShape(12.dp)).padding(horizontal = 10.dp, vertical = 5.dp)
+                    )
+                }
                 // Moon ring (debug): follows the detected Moon
                 val mh = moon
                 if (solarMode && mh != null) {
@@ -903,6 +928,7 @@ fun CameraScreen() {
                         modifier = Modifier.size(Dims.topIcon).clickable {
                             solarMode = !solarMode
                             buzz(HapticFeedbackConstants.CONTEXT_CLICK)
+                            if (solarMode && !locOk) locLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
                             showToast(if (solarMode) "Solar-Mode включён: Луна ищется от 7x" else "Solar-Mode выключен")
                         }
                     )
