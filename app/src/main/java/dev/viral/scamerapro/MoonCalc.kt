@@ -19,7 +19,8 @@ data class MoonInfo(
     val azDeg: Double,
     val illum: Double,
     val waxing: Boolean,
-    val brightLimbDeg: Double
+    val brightLimbDeg: Double,
+    val northDeg: Double
 )
 
 private fun rad(d: Double) = Math.toRadians(d)
@@ -94,7 +95,7 @@ fun moonInfoAt(jdUtc: Double, latDeg: Double, lonDeg: Double): MoonInfo {
     val alt = asin((sin(phi) * sin(decM) + cos(phi) * cos(decM) * cos(h)).coerceIn(-1.0, 1.0))
     val az = atan2(sin(h), cos(h) * sin(phi) - tan(decM) * cos(phi)) + PI
     val q = atan2(sin(h), tan(phi) * cos(decM) - sin(decM) * cos(h))
-    return MoonInfo(deg(alt), norm360(deg(az)), illum, waxing, norm360(deg(chi - q)))
+    return MoonInfo(deg(alt), norm360(deg(az)), illum, waxing, norm360(deg(chi - q)), deg(-q))
 }
 
 /** Uses the last known approximate location (open any maps app once if there is none). */
