@@ -170,6 +170,8 @@ fun CameraScreen() {
     var solarMode by remember { mutableStateOf(false) }
     var moon by remember { mutableStateOf<MoonHit?>(null) }
     var moonMiss by remember { mutableIntStateOf(0) }
+    var moonHits by remember { mutableIntStateOf(0) }
+    var solarZoomOk by remember { mutableStateOf(false) }
     var lastText by remember { mutableStateOf("") }
     var showText by remember { mutableStateOf(false) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
@@ -184,18 +186,22 @@ fun CameraScreen() {
             setImageAnalysisBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             setImageAnalysisAnalyzer(
                 analysisExecutor,
-                CameraAnalyzer({ solarMode }, { hit ->
+                CameraAnalyzer({ solarMode && solarZoomOk }, { hit ->
                     if (hit != null) {
                         moonMiss = 0
-                        val p = moon
-                        moon = if (p == null) hit else MoonHit(
-                            p.cx + (hit.cx - p.cx) * 0.35f,
-                            p.cy + (hit.cy - p.cy) * 0.35f,
-                            p.r + (hit.r - p.r) * 0.35f
-                        )
+                        moonHits++
+                        if (moonHits >= 3) {
+                            val p = moon
+                            moon = if (p == null) hit else MoonHit(
+                                p.cx + (hit.cx - p.cx) * 0.3f,
+                                p.cy + (hit.cy - p.cy) * 0.3f,
+                                p.r + (hit.r - p.r) * 0.3f
+                            )
+                        }
                     } else {
+                        moonHits = 0
                         moonMiss++
-                        if (moonMiss > 10) moon = null
+                        if (moonMiss > 25) moon = null
                     }
                 }) { t ->
                     val found = t.trim().length >= 8
@@ -584,8 +590,11 @@ fun CameraScreen() {
         if (textFound) 1f else 0f, spring(dampingRatio = 0.55f, stiffness = 380f), label = "tBtn"
     )
 
-    val moonLocked = solarMode && moon != null
-    LaunchedEffect(solarMode) { if (!solarMode) { moon = null; moonMiss = 0 } }
+    val moonLocked = solarMode && solarZoomOk && moon != null
+    LaunchedEffect(displayZoom >= 7f) { solarZoomOk = displayZoom >= 7f }
+    LaunchedEffect(solarMode, solarZoomOk) {
+        if (!(solarMode && solarZoomOk)) { moon = null; moonMiss = 0; moonHits = 0 }
+    }
     LaunchedEffect(moonLocked) { delay(150); applyMoonExposure(controller, moonLocked, ranges) }
     LaunchedEffect(moon != null) {
         if (solarMode && moon != null) showToast("Луна найдена, экспозиция зафиксирована")
@@ -894,7 +903,7 @@ fun CameraScreen() {
                         modifier = Modifier.size(Dims.topIcon).clickable {
                             solarMode = !solarMode
                             buzz(HapticFeedbackConstants.CONTEXT_CLICK)
-                            showToast(if (solarMode) "Solar-Mode включён" else "Solar-Mode выключен")
+                            showToast(if (solarMode) "Solar-Mode включён: Луна ищется от 7x" else "Solar-Mode выключен")
                         }
                     )
                 }
