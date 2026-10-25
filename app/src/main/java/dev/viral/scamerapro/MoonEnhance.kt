@@ -1,0 +1,227 @@
+package dev.viral.scamerapro
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.BitmapRegionDecoder
+import android.graphics.Canvas
+import android.graphics.Rect
+import android.media.ExifInterface
+import android.net.Uri
+import android.util.Log
+import java.util.Random
+import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sqrt
+
+/** Adds real Moon detail (NASA map) to a saved photo: finds the Moon, matches rotation, blends detail + grain. */
+object MoonEnhance {
+    fun run(ctx: Context, uri: Uri, info: MoonInfo): Boolean = try {
+        work(ctx, uri, info)
+    } catch (e: Throwable) {
+        Log.e("SCameraPro", "moon enhance failed", e)
+        false
+    }
+
+    private fun work(ctx: Context, uri: Uri, info: MoonInfo): Boolean {
+        if (info.illum < 0.8) return false // thin phases: later
+        val cr = ctx.contentResolver
+        val orient = cr.openInputStream(uri)?.use {
+            ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, 1)
+        } ?: 1
+
+        // 1) find the Moon on a 1/4 size copy
+        val small = cr.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = 4 })
+        } ?: return false
+        val sw = small.width
+        val sh = small.height
+        val px = IntArray(sw * sh)
+        small.getPixels(px, 0, sw, 0, 0, sw, sh)
+        small.recycle()
+        val lum = IntArray(px.size) {
+            (((px[it] shr 16) and 255) * 77 + ((px[it] shr 8) and 255) * 150 + (px[it] and 255) * 29) shr 8
+        }
+        var mx = 0
+        for (v in lum) if (v > mx) mx = v
+        if (mx < 80) return false
+        val thr = max(40, mx / 2)
+        val seen = BooleanArray(lum.size)
+        val stack = IntArray(lum.size)
+        var best = 0
+        var bx0 = 0; var bx1 = 0; var by0 = 0; var by1 = 0
+        for (s0 in lum.indices) {
+            if (seen[s0] || lum[s0] < thr) continue
+            var sp = 0
+            stack[sp++] = s0
+            seen[s0] = true
+            var cnt = 0
+            var x0 = sw; var x1 = 0; var y0 = sh; var y1 = 0
+            while (sp > 0) {
+                val i = stack[--sp]
+                val x = i % sw
+                val y = i / sw
+                cnt++
+                if (x < x0) x0 = x
+                if (x > x1) x1 = x
+                if (y < y0) y0 = y
+                if (y > y1) y1 = y
+                if (x > 0 && !seen[i - 1] && lum[i - 1] >= thr) { seen[i - 1] = true; stack[sp++] = i - 1 }
+                if (x < sw - 1 && !seen[i + 1] && lum[i + 1] >= thr) { seen[i + 1] = true; stack[sp++] = i + 1 }
+                if (y > 0 && !seen[i - sw] && lum[i - sw] >= thr) { seen[i - sw] = true; stack[sp++] = i - sw }
+                if (y < sh - 1 && !seen[i + sw] && lum[i + sw] >= thr) { seen[i + sw] = true; stack[sp++] = i + sw }
+            }
+            if (cnt > best) { best = cnt; bx0 = x0; bx1 = x1; by0 = y0; by1 = y1 }
+        }
+        val bw = bx1 - bx0 + 1
+        val bh = by1 - by0 + 1
+        if (best < 200 || bw.toFloat() / bh !in 0.7f..1.4f) return false
+        val cxF = ((bx0 + bx1 + 1) / 2f * 4f).toInt()
+        val cyF = ((by0 + by1 + 1) / 2f * 4f).toInt()
+        val rad = max(bw, bh) * 2f // radius in full-res pixels (bbox/2 * 4)
+        val dia = (rad * 2).toInt()
+        if (dia < 64 || dia > 2000) return false
+
+        // 2) cut out a square around the Moon at full resolution
+        val side = (dia * 1.15f).toInt()
+        val dec = cr.openInputStream(uri)?.use { BitmapRegionDecoder.newInstance(it, false) } ?: return false
+        val fw = dec.width
+        val fh = dec.height
+        val left = (cxF - side / 2).coerceIn(0, max(0, fw - side))
+        val top = (cyF - side / 2).coerceIn(0, max(0, fh - side))
+        val rb = dec.decodeRegion(
+            Rect(left, top, min(fw, left + side), min(fh, top + side)),
+            BitmapFactory.Options().apply { inMutable = true; inPreferredConfig = Bitmap.Config.ARGB_8888 }
+        )
+        dec.recycle()
+        val rw = rb.width
+        val rh = rb.height
+        val ccx = cxF - left
+        val ccy = cyF - top
+        val rpx = IntArray(rw * rh)
+        rb.getPixels(rpx, 0, rw, 0, 0, rw, rh)
+
+        // 3) find the rotation: compare a 64x64 view of the real Moon with rendered candidates
+        val n = 64
+        val ox = (ccx - rad).toInt().coerceIn(0, rw - 2)
+        val oy = (ccy - rad).toInt().coerceIn(0, rh - 2)
+        val crop = Bitmap.createBitmap(rb, ox, oy, min(dia, rw - ox), min(dia, rh - oy))
+        val real = Bitmap.createScaledBitmap(crop, n, n, true)
+        val realPx = IntArray(n * n)
+        real.getPixels(realPx, 0, n, 0, 0, n, n)
+        val realL = IntArray(n * n) { (realPx[it] shr 8) and 255 }
+        val mask = BooleanArray(n * n) {
+            val nx = ((it % n) + 0.5f) / n * 2f - 1f
+            val ny = ((it / n) + 0.5f) / n * 2f - 1f
+            nx * nx + ny * ny < 0.8f
+        }
+        fun score(angle: Double): Double {
+            val r = MoonRender.render(ctx, info.copy(northDeg = angle), n) ?: return -1.0
+            val rp = IntArray(n * n)
+            r.getPixels(rp, 0, n, 0, 0, n, n)
+            return ncc(realL, IntArray(n * n) { (rp[it] shr 8) and 255 }, mask)
+        }
+        var bestA = 0.0
+        var bestS = -2.0
+        var a = 0.0
+        while (a < 360.0) { val s = score(a); if (s > bestS) { bestS = s; bestA = a }; a += 6.0 }
+        val base = bestA
+        a = base - 6.0
+        while (a <= base + 6.0) { val s = score(a); if (s > bestS) { bestS = s; bestA = a }; a += 2.0 }
+        if (bestS < 0.25) return false // no convincing match: leave the photo alone
+
+        // 4) full-size reference, high-pass detail
+        val ref = MoonRender.render(ctx, info.copy(northDeg = bestA), dia) ?: return false
+        val rfPx = IntArray(dia * dia)
+        ref.getPixels(rfPx, 0, dia, 0, 0, dia, dia)
+        val rl = FloatArray(dia * dia) { ((rfPx[it] shr 8) and 255).toFloat() }
+        val blurred = blur(rl, dia, dia, max(2, dia / 40))
+        val detail = FloatArray(rl.size) { rl[it] - blurred[it] }
+
+        // brightness match and sky grain
+        var rs = 0.0; var rc = 0; var ps = 0.0; var pc = 0
+        var ss = 0.0; var ss2 = 0.0; var sc = 0
+        for (y in 0 until rh) for (x in 0 until rw) {
+            val d = hypot(x + 0.5f - ccx, y + 0.5f - ccy) / rad
+            val l = (((rpx[y * rw + x] shr 8) and 255)).toDouble()
+            if (d < 0.9f) { ps += l; pc++ } else if (d > 1.1f) { ss += l; ss2 += l * l; sc++ }
+        }
+        for (i in rl.indices) if (rl[i] > 8f) { rs += rl[i]; rc++ }
+        val gain = if (rc > 0 && pc > 0) ((ps / pc) / (rs / rc)).toFloat().coerceIn(0.3f, 3f) else 1f
+        val skyStd = if (sc > 10) sqrt(max(0.0, ss2 / sc - (ss / sc) * (ss / sc))).toFloat() else 3f
+        val grain = skyStd.coerceIn(1f, 10f) * 0.9f
+        val rnd = Random(7)
+
+        // 5) blend inside the disc with a soft rim
+        val rox = ccx - dia / 2
+        val roy = ccy - dia / 2
+        for (y in 0 until rh) for (x in 0 until rw) {
+            val rx = x - rox
+            val ry = y - roy
+            if (rx < 0 || ry < 0 || rx >= dia || ry >= dia) continue
+            val d = hypot(rx + 0.5f - dia / 2f, ry + 0.5f - dia / 2f) / (dia / 2f)
+            if (d >= 1f) continue
+            val w = ((1f - d) / 0.12f).coerceIn(0f, 1f)
+            val delta = (detail[ry * dia + rx] * gain * 0.85f + rnd.nextGaussian().toFloat() * grain) * w
+            val c = rpx[y * rw + x]
+            val r = (((c shr 16) and 255) + delta).toInt().coerceIn(0, 255)
+            val g = (((c shr 8) and 255) + delta).toInt().coerceIn(0, 255)
+            val b = ((c and 255) + delta).toInt().coerceIn(0, 255)
+            rpx[y * rw + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+        }
+        rb.setPixels(rpx, 0, rw, 0, 0, rw, rh)
+
+        // 6) put the piece back into the full photo and save
+        val full = cr.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inMutable = true })
+        } ?: return false
+        Canvas(full).drawBitmap(rb, left.toFloat(), top.toFloat(), null)
+        cr.openOutputStream(uri, "wt")?.use { full.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+        cr.openFileDescriptor(uri, "rw")?.use { pfd ->
+            val ex = ExifInterface(pfd.fileDescriptor)
+            ex.setAttribute(ExifInterface.TAG_ORIENTATION, orient.toString())
+            ex.saveAttributes()
+        }
+        return true
+    }
+
+    private fun ncc(a: IntArray, b: IntArray, m: BooleanArray): Double {
+        var n = 0; var sa = 0.0; var sb = 0.0
+        for (i in a.indices) if (m[i]) { n++; sa += a[i]; sb += b[i] }
+        if (n == 0) return -1.0
+        val ma = sa / n
+        val mb = sb / n
+        var num = 0.0; var da = 0.0; var db = 0.0
+        for (i in a.indices) if (m[i]) {
+            val x = a[i] - ma
+            val y = b[i] - mb
+            num += x * y; da += x * x; db += y * y
+        }
+        return if (da < 1e-6 || db < 1e-6) -1.0 else num / sqrt(da * db)
+    }
+
+    private fun blur(a: FloatArray, w: Int, h: Int, r: Int): FloatArray {
+        val t = FloatArray(a.size)
+        val o = FloatArray(a.size)
+        val div = 2f * r + 1f
+        for (y in 0 until h) {
+            val row = y * w
+            var s = 0f
+            for (i in -r..r) s += a[row + i.coerceIn(0, w - 1)]
+            for (x in 0 until w) {
+                t[row + x] = s / div
+                s += a[row + (x + r + 1).coerceAtMost(w - 1)] - a[row + (x - r).coerceAtLeast(0)]
+            }
+        }
+        for (x in 0 until w) {
+            var s = 0f
+            for (i in -r..r) s += t[i.coerceIn(0, h - 1) * w + x]
+            for (y in 0 until h) {
+                o[y * w + x] = s / div
+                s += t[(y + r + 1).coerceAtMost(h - 1) * w + x] - t[(y - r).coerceAtLeast(0) * w + x]
+            }
+        }
+        return o
+    }
+}
