@@ -607,8 +607,8 @@ fun CameraScreen() {
         if (!(solarMode && solarZoomOk)) { moon = null; moonMiss = 0; moonHits = 0 }
     }
     LaunchedEffect(solarMode, locOk) {
-        while (solarMode && locOk) {
-            moonInfo = currentMoonInfo(context)
+        while (solarMode) {
+            moonInfo = currentMoonInfo(context, locOk)
             delay(10_000)
         }
         if (!solarMode) moonInfo = null
@@ -673,7 +673,7 @@ fun CameraScreen() {
                 if (solarMode && mi != null) {
                     Text(
                         String.format(
-                            Locale.US, "☾ %d%% %s, выс. %d°",
+                            Locale.US, (if (mi.approx) "~" else "") + "☾ %d%% %s, выс. %d°",
                             (mi.illum * 100).roundToInt(), if (mi.waxing) "растёт" else "убывает", mi.altDeg.roundToInt()
                         ),
                         color = Color.White,
