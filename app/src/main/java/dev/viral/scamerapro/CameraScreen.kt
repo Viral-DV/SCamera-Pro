@@ -529,10 +529,12 @@ fun CameraScreen() {
             flashAnim.animateTo(0f, tween(120))
         }
         val f = digitalExtra
+        val mInfo = if (solarMode && solarZoomOk) moonInfo else null
         takePhoto(activity, controller) { uri ->
-            if (f > 1.01f) {
+            if (f > 1.01f || mInfo != null) {
                 Thread {
-                    digitalCrop(activity, uri, f)
+                    if (f > 1.01f) digitalCrop(activity, uri, f)
+                    if (mInfo != null) MoonEnhance.run(activity, uri, mInfo)
                     activity.runOnUiThread { lastUri = uri }
                 }.start()
             } else {
