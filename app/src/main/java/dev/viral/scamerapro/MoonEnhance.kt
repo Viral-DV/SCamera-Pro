@@ -17,15 +17,16 @@ import kotlin.math.sqrt
 
 /** Adds real Moon detail (NASA map) to a saved photo: finds the Moon, matches rotation, blends detail + grain. */
 object MoonEnhance {
-    fun run(ctx: Context, uri: Uri, info: MoonInfo): Boolean = try {
+    fun run(ctx: Context, uri: Uri, info: MoonInfo): String = try {
         work(ctx, uri, info)
     } catch (e: Throwable) {
         Log.e("SCameraPro", "moon enhance failed", e)
-        false
+        "ошибка: " + e.javaClass.simpleName
     }
 
-    private fun work(ctx: Context, uri: Uri, info: MoonInfo): Boolean {
-        if (info.illum < 0.8) return false // thin phases: later
+    private fun work(ctx: Context, uri: Uri, info: MoonInfo): String {
+        if (info.illum < 0.8) return "фаза " + (info.illum * 100).toInt() + "% < 80%"
+        if (MoonRender.render(ctx, info, 8) == null) return "нет moon_map.jpg в assets"
         val cr = ctx.contentResolver
         val orient = cr.openInputStream(uri)?.use {
             ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, 1)
@@ -34,7 +35,7 @@ object MoonEnhance {
         // 1) find the Moon on a 1/4 size copy
         val small = cr.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = 4 })
-        } ?: return false
+        } ?: return "не удалось прочитать фото"
         val sw = small.width
         val sh = small.height
         val px = IntArray(sw * sh)
@@ -45,7 +46,7 @@ object MoonEnhance {
         }
         var mx = 0
         for (v in lum) if (v > mx) mx = v
-        if (mx < 80) return false
+        if (mx < 80) return "кадр тёмный (макс $mx)"
         val thr = max(40, mx / 2)
         val seen = BooleanArray(lum.size)
         val stack = IntArray(lum.size)
@@ -76,16 +77,16 @@ object MoonEnhance {
         }
         val bw = bx1 - bx0 + 1
         val bh = by1 - by0 + 1
-        if (best < 200 || bw.toFloat() / bh !in 0.7f..1.4f) return false
+        if (best < 200 || bw.toFloat() / bh !in 0.7f..1.4f) return "пятно не круглое: ${bw}x$bh, $best"
         val cxF = ((bx0 + bx1 + 1) / 2f * 4f).toInt()
         val cyF = ((by0 + by1 + 1) / 2f * 4f).toInt()
         val rad = max(bw, bh) * 2f // radius in full-res pixels (bbox/2 * 4)
         val dia = (rad * 2).toInt()
-        if (dia < 64 || dia > 2000) return false
+        if (dia < 64 || dia > 2000) return "диск $dia px вне 64..2000"
 
         // 2) cut out a square around the Moon at full resolution
         val side = (dia * 1.15f).toInt()
-        val dec = cr.openInputStream(uri)?.use { BitmapRegionDecoder.newInstance(it, false) } ?: return false
+        val dec = cr.openInputStream(uri)?.use { BitmapRegionDecoder.newInstance(it, false) } ?: return "не удалось прочитать фото"
         val fw = dec.width
         val fh = dec.height
         val left = (cxF - side / 2).coerceIn(0, max(0, fw - side))
@@ -114,7 +115,7 @@ object MoonEnhance {
         val mask = BooleanArray(n * n) {
             val nx = ((it % n) + 0.5f) / n * 2f - 1f
             val ny = ((it / n) + 0.5f) / n * 2f - 1f
-            nx * nx + ny * ny < 0.8f
+            nx * nx + ny * ny < 0.5f
         }
         fun score(angle: Double): Double {
             val r = MoonRender.render(ctx, info.copy(northDeg = angle), n) ?: return -1.0
@@ -129,10 +130,10 @@ object MoonEnhance {
         val base = bestA
         a = base - 6.0
         while (a <= base + 6.0) { val s = score(a); if (s > bestS) { bestS = s; bestA = a }; a += 2.0 }
-        if (bestS < 0.25) return false // no convincing match: leave the photo alone
+        if (bestS < 0.2) return "нет совпадения с картой (" + String.format("%.2f", bestS) + ")"
 
         // 4) full-size reference, high-pass detail
-        val ref = MoonRender.render(ctx, info.copy(northDeg = bestA), dia) ?: return false
+        val ref = MoonRender.render(ctx, info.copy(northDeg = bestA), dia) ?: return "не удалось прочитать фото"
         val rfPx = IntArray(dia * dia)
         ref.getPixels(rfPx, 0, dia, 0, 0, dia, dia)
         val rl = FloatArray(dia * dia) { ((rfPx[it] shr 8) and 255).toFloat() }
@@ -148,7 +149,7 @@ object MoonEnhance {
             if (d < 0.9f) { ps += l; pc++ } else if (d > 1.1f) { ss += l; ss2 += l * l; sc++ }
         }
         for (i in rl.indices) if (rl[i] > 8f) { rs += rl[i]; rc++ }
-        val gain = if (rc > 0 && pc > 0) ((ps / pc) / (rs / rc)).toFloat().coerceIn(0.3f, 3f) else 1f
+        val gain = if (rc > 0 && pc > 0) (min(ps / pc, 190.0) / (rs / rc)).toFloat().coerceIn(0.3f, 3f) else 1f
         val skyStd = if (sc > 10) sqrt(max(0.0, ss2 / sc - (ss / sc) * (ss / sc))).toFloat() else 3f
         val grain = skyStd.coerceIn(1f, 10f) * 0.9f
         val rnd = Random(7)
@@ -163,8 +164,10 @@ object MoonEnhance {
             val d = hypot(rx + 0.5f - dia / 2f, ry + 0.5f - dia / 2f) / (dia / 2f)
             if (d >= 1f) continue
             val w = ((1f - d) / 0.12f).coerceIn(0f, 1f)
-            val delta = (detail[ry * dia + rx] * gain * 0.85f + rnd.nextGaussian().toFloat() * grain) * w
             val c = rpx[y * rw + x]
+            val yOld = (((c shr 16) and 255) * 77 + ((c shr 8) and 255) * 150 + (c and 255) * 29) shr 8
+            val yNew = rl[ry * dia + rx] * gain
+            val delta = ((yNew - yOld) * STRENGTH + rnd.nextGaussian().toFloat() * grain) * w
             val r = (((c shr 16) and 255) + delta).toInt().coerceIn(0, 255)
             val g = (((c shr 8) and 255) + delta).toInt().coerceIn(0, 255)
             val b = ((c and 255) + delta).toInt().coerceIn(0, 255)
@@ -175,7 +178,7 @@ object MoonEnhance {
         // 6) put the piece back into the full photo and save
         val full = cr.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inMutable = true })
-        } ?: return false
+        } ?: return "не удалось прочитать фото"
         Canvas(full).drawBitmap(rb, left.toFloat(), top.toFloat(), null)
         cr.openOutputStream(uri, "wt")?.use { full.compress(Bitmap.CompressFormat.JPEG, 95, it) }
         cr.openFileDescriptor(uri, "rw")?.use { pfd ->
@@ -183,8 +186,10 @@ object MoonEnhance {
             ex.setAttribute(ExifInterface.TAG_ORIENTATION, orient.toString())
             ex.saveAttributes()
         }
-        return true
+        return "готово: совпадение " + String.format("%.2f", bestS) + ", угол " + bestA.toInt()
     }
+
+    private const val STRENGTH = 0.7f
 
     private fun ncc(a: IntArray, b: IntArray, m: BooleanArray): Double {
         var n = 0; var sa = 0.0; var sb = 0.0
