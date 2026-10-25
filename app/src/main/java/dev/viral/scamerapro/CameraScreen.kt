@@ -534,7 +534,10 @@ fun CameraScreen() {
             if (f > 1.01f || mInfo != null) {
                 Thread {
                     if (f > 1.01f) digitalCrop(activity, uri, f)
-                    if (mInfo != null) MoonEnhance.run(activity, uri, mInfo)
+                    if (mInfo != null) {
+                        val msg = MoonEnhance.run(activity, uri, mInfo)
+                        activity.runOnUiThread { showToast(msg) }
+                    }
                     activity.runOnUiThread { lastUri = uri }
                 }.start()
             } else {
