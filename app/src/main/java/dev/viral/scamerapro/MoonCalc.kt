@@ -20,7 +20,8 @@ data class MoonInfo(
     val illum: Double,
     val waxing: Boolean,
     val brightLimbDeg: Double,
-    val northDeg: Double
+    val northDeg: Double,
+    val approx: Boolean = false
 )
 
 private fun rad(d: Double) = Math.toRadians(d)
@@ -98,14 +99,26 @@ fun moonInfoAt(jdUtc: Double, latDeg: Double, lonDeg: Double): MoonInfo {
     return MoonInfo(deg(alt), norm360(deg(az)), illum, waxing, norm360(deg(chi - q)), deg(-q))
 }
 
-/** Uses the last known approximate location (open any maps app once if there is none). */
+/** Last known approximate location if allowed; otherwise a default spot in Germany (marked approx). */
 @SuppressLint("MissingPermission")
-fun currentMoonInfo(ctx: Context): MoonInfo? {
-    val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-    val found = listOf(LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER).mapNotNull {
-        try { lm.getLastKnownLocation(it) } catch (e: Exception) { null }
+fun currentMoonInfo(ctx: Context, useLocation: Boolean = true): MoonInfo {
+    var lat = 52.5
+    var lon = 13.4
+    var approx = true
+    if (useLocation) {
+        try {
+            val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val loc = listOf(LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER).mapNotNull {
+                try { lm.getLastKnownLocation(it) } catch (e: Exception) { null }
+            }.maxByOrNull { it.time }
+            if (loc != null) {
+                lat = loc.latitude
+                lon = loc.longitude
+                approx = false
+            }
+        } catch (e: Exception) {
+        }
     }
-    val loc = found.maxByOrNull { it.time } ?: return null
     val jd = System.currentTimeMillis() / 86400000.0 + 2440587.5
-    return moonInfoAt(jd, loc.latitude, loc.longitude)
+    return moonInfoAt(jd, lat, lon).copy(approx = approx)
 }
