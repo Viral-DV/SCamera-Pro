@@ -33,7 +33,7 @@ object MoonRender {
         }
     }
 
-    fun render(ctx: Context, info: MoonInfo, size: Int): Bitmap? {
+    fun render(ctx: Context, info: MoonInfo, size: Int, mirror: Boolean = false): Bitmap? {
         if (!load(ctx)) return null
         val out = IntArray(size * size)
         val r = size / 2f
@@ -58,7 +58,7 @@ object MoonRender {
                 val my = -nx * sN + ny * cN
                 val mz = sqrt(max(0f, 1f - mx * mx - my * my))
                 val lat = asin(my.toDouble().coerceIn(-1.0, 1.0))
-                val lon = atan2(mx.toDouble(), mz.toDouble())
+                val lon = atan2(mx.toDouble(), mz.toDouble()).let { if (mirror) -it else it }
                 val ix = ((0.5 + lon / (2 * PI)) * mw).toInt().coerceIn(0, mw - 1)
                 val iy = ((0.5 - lat / PI) * mh).toInt().coerceIn(0, mh - 1)
                 val c = px[iy * mw + ix]
