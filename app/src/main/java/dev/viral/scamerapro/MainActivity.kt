@@ -1,6 +1,16 @@
 package dev.viral.scamerapro
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.sp
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.WindowManager
@@ -40,13 +50,55 @@ class MainActivity : ComponentActivity() {
         window.attributes = lp
         hideSystemBars()
 
+        installCrashLogger()
+        val prevCrash = readCrash()
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
+                var crash by remember { mutableStateOf(prevCrash) }
                 Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
                     CameraRoot()
                 }
+                crash?.let { text ->
+                    AlertDialog(
+                        onDismissRequest = { crash = null },
+                        title = { Text("Прошлый запуск завершился ошибкой") },
+                        text = {
+                            Column(Modifier.verticalScroll(rememberScrollState())) {
+                                Text(text, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                cm.setPrimaryClip(ClipData.newPlainText("crash", text))
+                                crash = null
+                            }) { Text("Копировать") }
+                        },
+                        dismissButton = { TextButton(onClick = { crash = null }) { Text("Закрыть") } }
+                    )
+                }
             }
         }
+    }
+
+    private fun crashFile() = java.io.File(filesDir, "last_crash.txt")
+
+    private fun installCrashLogger() {
+        val old = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                crashFile().writeText(android.util.Log.getStackTraceString(e).take(6000))
+            } catch (_: Exception) {
+            }
+            old?.uncaughtException(t, e)
+        }
+    }
+
+    private fun readCrash(): String? = try {
+        val f = crashFile()
+        if (f.exists()) f.readText().also { f.delete() } else null
+    } catch (e: Exception) {
+        null
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
