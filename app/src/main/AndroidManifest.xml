@@ -8,11 +8,13 @@
 
     <application
         android:allowBackup="true"
-        android:label="S Camera Pro"
+        android:icon="@mipmap/ic_launcher"
+        android:label="FootageS"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:label="FootageS"
             android:screenOrientation="portrait">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
