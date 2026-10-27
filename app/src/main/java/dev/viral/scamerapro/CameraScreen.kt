@@ -1275,6 +1275,7 @@ private fun takePhoto(activity: ComponentActivity, controller: LifecycleCameraCo
         values
     ).build()
 
+    try {
     controller.takePicture(
         options,
         ContextCompat.getMainExecutor(activity),
@@ -1288,6 +1289,9 @@ private fun takePhoto(activity: ComponentActivity, controller: LifecycleCameraCo
             }
         }
     )
+    } catch (e: Exception) {
+        Log.e("SCameraPro", "takePicture failed", e)
+    }
 }
 
 @Composable
