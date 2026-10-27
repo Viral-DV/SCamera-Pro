@@ -117,23 +117,34 @@ object MoonEnhance {
             val ny = ((it / n) + 0.5f) / n * 2f - 1f
             nx * nx + ny * ny < 0.5f
         }
-        fun score(angle: Double): Double {
-            val r = MoonRender.render(ctx, info.copy(northDeg = angle), n) ?: return -1.0
+        fun score(angle: Double, mir: Boolean): Double {
+            val r = MoonRender.render(ctx, info.copy(northDeg = angle), n, mir) ?: return -1.0
             val rp = IntArray(n * n)
             r.getPixels(rp, 0, n, 0, 0, n, n)
             return ncc(realL, IntArray(n * n) { (rp[it] shr 8) and 255 }, mask)
         }
         var bestA = 0.0
         var bestS = -2.0
-        var a = 0.0
-        while (a < 360.0) { val s = score(a); if (s > bestS) { bestS = s; bestA = a }; a += 6.0 }
+        var bestM = false
+        for (mir in listOf(false, true)) {
+            var ang = 0.0
+            while (ang < 360.0) {
+                val s = score(ang, mir)
+                if (s > bestS) { bestS = s; bestA = ang; bestM = mir }
+                ang += 6.0
+            }
+        }
         val base = bestA
-        a = base - 6.0
-        while (a <= base + 6.0) { val s = score(a); if (s > bestS) { bestS = s; bestA = a }; a += 2.0 }
-        if (bestS < 0.2) return "нет совпадения с картой (" + String.format("%.2f", bestS) + ")"
+        var ang2 = base - 6.0
+        while (ang2 <= base + 6.0) {
+            val s = score(ang2, bestM)
+            if (s > bestS) { bestS = s; bestA = ang2 }
+            ang2 += 2.0
+        }
+        if (bestS < 0.15) return "нет совпадения с картой (" + String.format("%.2f", bestS) + ")"
 
         // 4) full-size reference, high-pass detail
-        val ref = MoonRender.render(ctx, info.copy(northDeg = bestA), dia) ?: return "не удалось прочитать фото"
+        val ref = MoonRender.render(ctx, info.copy(northDeg = bestA), dia, bestM) ?: return "не удалось прочитать фото"
         val rfPx = IntArray(dia * dia)
         ref.getPixels(rfPx, 0, dia, 0, 0, dia, dia)
         val rl = FloatArray(dia * dia) { ((rfPx[it] shr 8) and 255).toFloat() }
@@ -186,7 +197,7 @@ object MoonEnhance {
             ex.setAttribute(ExifInterface.TAG_ORIENTATION, orient.toString())
             ex.saveAttributes()
         }
-        return "готово: совпадение " + String.format("%.2f", bestS) + ", угол " + bestA.toInt()
+        return "готово: совпадение " + String.format("%.2f", bestS) + ", угол " + bestA.toInt() + (if (bestM) " (зеркало)" else "")
     }
 
     private const val STRENGTH = 0.7f
