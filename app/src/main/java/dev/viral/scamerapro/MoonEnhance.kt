@@ -85,7 +85,7 @@ object MoonEnhance {
         if (dia < 64 || dia > 2000) return "диск $dia px вне 64..2000"
 
         // 2) cut out a square around the Moon at full resolution
-        val side = (dia * 1.15f).toInt()
+        val side = (dia * 1.45f).toInt()
         val dec = cr.openInputStream(uri)?.use { BitmapRegionDecoder.newInstance(it, false) } ?: return "не удалось прочитать фото"
         val fw = dec.width
         val fh = dec.height
@@ -99,8 +99,8 @@ object MoonEnhance {
         val rb = if (rb0.isMutable) rb0 else rb0.copy(Bitmap.Config.ARGB_8888, true)
         val rw = rb.width
         val rh = rb.height
-        val ccx = cxF - left
-        val ccy = cyF - top
+        var ccx = cxF - left
+        var ccy = cyF - top
         val rpx = IntArray(rw * rh)
         rb.getPixels(rpx, 0, rw, 0, 0, rw, rh)
 
@@ -144,6 +144,29 @@ object MoonEnhance {
         }
         if (bestS < 0.15) return "нет совпадения с картой (" + String.format("%.2f", bestS) + ")"
 
+        // 3b) fine centre: try small shifts of the real crop against the matched reference
+        val refSmall = MoonRender.render(ctx, info.copy(northDeg = bestA), n, bestM)
+        if (refSmall != null) {
+            val rp = IntArray(n * n)
+            refSmall.getPixels(rp, 0, n, 0, 0, n, n)
+            val rL = IntArray(n * n) { (rp[it] shr 8) and 255 }
+            var bs = -2.0
+            var bdx = 0
+            var bdy = 0
+            for (sy in -2..2) for (sx in -2..2) {
+                val px0 = (ccx - rad + sx * 0.03f * dia).toInt().coerceIn(0, max(0, rw - dia))
+                val py0 = (ccy - rad + sy * 0.03f * dia).toInt().coerceIn(0, max(0, rh - dia))
+                val c2 = Bitmap.createBitmap(rb, px0, py0, min(dia, rw - px0), min(dia, rh - py0))
+                val s2 = Bitmap.createScaledBitmap(c2, n, n, true)
+                val sp = IntArray(n * n)
+                s2.getPixels(sp, 0, n, 0, 0, n, n)
+                val sc2 = ncc(IntArray(n * n) { (sp[it] shr 8) and 255 }, rL, mask)
+                if (sc2 > bs) { bs = sc2; bdx = sx; bdy = sy }
+            }
+            ccx += (bdx * 0.03f * dia).toInt()
+            ccy += (bdy * 0.03f * dia).toInt()
+        }
+
         // 4) full-size reference, high-pass detail
         val ref = MoonRender.render(ctx, info.copy(northDeg = bestA), dia, bestM) ?: return "не удалось прочитать фото"
         val rfPx = IntArray(dia * dia)
@@ -166,24 +189,47 @@ object MoonEnhance {
         val grain = skyStd.coerceIn(1f, 10f) * 0.9f
         val rnd = Random(7)
 
-        // 5) blend inside the disc with a soft rim
+        // 5) full replacement: repaint the old blurry disc with sky, then draw the new Moon with a clean edge
+        var skR = 0L; var skG = 0L; var skB = 0L; var skN = 0
+        val half = dia / 2f
+        for (y in 0 until rh) for (x in 0 until rw) {
+            if (hypot(x + 0.5f - ccx, y + 0.5f - ccy) / half > 1.32f) {
+                val c = rpx[y * rw + x]
+                skR += (c shr 16) and 255; skG += (c shr 8) and 255; skB += c and 255; skN++
+            }
+        }
+        val sR = if (skN > 0) skR.toFloat() / skN else 2f
+        val sG = if (skN > 0) skG.toFloat() / skN else 2f
+        val sB = if (skN > 0) skB.toFloat() / skN else 2f
         val rox = ccx - dia / 2
         val roy = ccy - dia / 2
         for (y in 0 until rh) for (x in 0 until rw) {
-            val rx = x - rox
-            val ry = y - roy
-            if (rx < 0 || ry < 0 || rx >= dia || ry >= dia) continue
-            val d = hypot(rx + 0.5f - dia / 2f, ry + 0.5f - dia / 2f) / (dia / 2f)
-            if (d >= 1f) continue
-            val w = ((1f - d) / 0.12f).coerceIn(0f, 1f)
+            val d = hypot(x + 0.5f - ccx, y + 0.5f - ccy) / half
+            if (d >= 1.28f) continue
             val c = rpx[y * rw + x]
-            val yOld = (((c shr 16) and 255) * 77 + ((c shr 8) and 255) * 150 + (c and 255) * 29) shr 8
-            val yNew = rl[ry * dia + rx] * gain
-            val delta = ((yNew - yOld) * STRENGTH + rnd.nextGaussian().toFloat() * grain) * w
-            val r = (((c shr 16) and 255) + delta).toInt().coerceIn(0, 255)
-            val g = (((c shr 8) and 255) + delta).toInt().coerceIn(0, 255)
-            val b = ((c and 255) + delta).toInt().coerceIn(0, 255)
-            rpx[y * rw + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+            var r = ((c shr 16) and 255).toFloat()
+            var g = ((c shr 8) and 255).toFloat()
+            var b = (c and 255).toFloat()
+            val wSky = 1f - smooth(1.10f, 1.28f, d)
+            if (wSky > 0f) {
+                val nz = rnd.nextGaussian().toFloat() * grain * 0.6f
+                r += (sR + nz - r) * wSky
+                g += (sG + nz - g) * wSky
+                b += (sB + nz - b) * wSky
+            }
+            if (d < 1f) {
+                val rx = x - rox
+                val ry = y - roy
+                if (rx in 0 until dia && ry in 0 until dia) {
+                    val aEdge = 1f - smooth(0.955f, 1f, d)
+                    val v = (rl[ry * dia + rx] * gain + rnd.nextGaussian().toFloat() * grain).coerceIn(0f, 255f)
+                    r += (v * 1.03f - r) * aEdge
+                    g += (v - g) * aEdge
+                    b += (v * 0.96f - b) * aEdge
+                }
+            }
+            rpx[y * rw + x] = (0xFF shl 24) or (r.toInt().coerceIn(0, 255) shl 16) or
+                (g.toInt().coerceIn(0, 255) shl 8) or b.toInt().coerceIn(0, 255)
         }
         rb.setPixels(rpx, 0, rw, 0, 0, rw, rh)
 
@@ -202,7 +248,10 @@ object MoonEnhance {
         return "готово: совпадение " + String.format("%.2f", bestS) + ", угол " + bestA.toInt() + (if (bestM) " (зеркало)" else "")
     }
 
-    private const val STRENGTH = 0.7f
+    private fun smooth(e0: Float, e1: Float, x: Float): Float {
+        val t = ((x - e0) / (e1 - e0)).coerceIn(0f, 1f)
+        return t * t * (3f - 2f * t)
+    }
 
     private fun ncc(a: IntArray, b: IntArray, m: BooleanArray): Double {
         var n = 0; var sa = 0.0; var sb = 0.0
