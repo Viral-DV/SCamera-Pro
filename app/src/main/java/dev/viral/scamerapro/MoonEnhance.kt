@@ -21,7 +21,7 @@ object MoonEnhance {
         work(ctx, uri, info)
     } catch (e: Throwable) {
         Log.e("SCameraPro", "moon enhance failed", e)
-        "ошибка: " + e.javaClass.simpleName
+        ("ошибка: " + e.javaClass.simpleName + " " + (e.message ?: "") + " @" + (e.stackTrace.firstOrNull()?.let { it.methodName + ":" + it.lineNumber } ?: "")).take(110)
     }
 
     private fun work(ctx: Context, uri: Uri, info: MoonInfo): String {
@@ -91,11 +91,12 @@ object MoonEnhance {
         val fh = dec.height
         val left = (cxF - side / 2).coerceIn(0, max(0, fw - side))
         val top = (cyF - side / 2).coerceIn(0, max(0, fh - side))
-        val rb = dec.decodeRegion(
+        val rb0 = dec.decodeRegion(
             Rect(left, top, min(fw, left + side), min(fh, top + side)),
             BitmapFactory.Options().apply { inMutable = true; inPreferredConfig = Bitmap.Config.ARGB_8888 }
         )
         dec.recycle()
+        val rb = if (rb0.isMutable) rb0 else rb0.copy(Bitmap.Config.ARGB_8888, true)
         val rw = rb.width
         val rh = rb.height
         val ccx = cxF - left
@@ -190,8 +191,9 @@ object MoonEnhance {
         val full = cr.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inMutable = true })
         } ?: return "не удалось прочитать фото"
-        Canvas(full).drawBitmap(rb, left.toFloat(), top.toFloat(), null)
-        cr.openOutputStream(uri, "wt")?.use { full.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+        val fullM = if (full.isMutable) full else full.copy(Bitmap.Config.ARGB_8888, true)
+        Canvas(fullM).drawBitmap(rb, left.toFloat(), top.toFloat(), null)
+        cr.openOutputStream(uri, "wt")?.use { fullM.compress(Bitmap.CompressFormat.JPEG, 95, it) }
         cr.openFileDescriptor(uri, "rw")?.use { pfd ->
             val ex = ExifInterface(pfd.fileDescriptor)
             ex.setAttribute(ExifInterface.TAG_ORIENTATION, orient.toString())
