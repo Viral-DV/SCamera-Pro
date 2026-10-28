@@ -4,13 +4,14 @@ import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.util.Log
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.sp
+import java.io.File
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.WindowManager
@@ -50,55 +51,26 @@ class MainActivity : ComponentActivity() {
         window.attributes = lp
         hideSystemBars()
 
-        installCrashLogger()
-        val prevCrash = readCrash()
+        // Remember the last crash so the next start can show what went wrong
+        val crashFile = File(filesDir, "crash.txt")
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try { crashFile.writeText(Log.getStackTraceString(e)) } catch (_: Exception) {}
+            prev?.uncaughtException(t, e)
+        }
+        var lastCrash: String? = null
+        if (crashFile.exists()) {
+            lastCrash = try { crashFile.readText() } catch (e: Exception) { null }
+            crashFile.delete()
+        }
+
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                var crash by remember { mutableStateOf(prevCrash) }
                 Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
-                    CameraRoot()
-                }
-                crash?.let { text ->
-                    AlertDialog(
-                        onDismissRequest = { crash = null },
-                        title = { Text("Прошлый запуск завершился ошибкой") },
-                        text = {
-                            Column(Modifier.verticalScroll(rememberScrollState())) {
-                                Text(text, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                            }
-                        },
-                        confirmButton = {
-                            TextButton(onClick = {
-                                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                cm.setPrimaryClip(ClipData.newPlainText("crash", text))
-                                crash = null
-                            }) { Text("Копировать") }
-                        },
-                        dismissButton = { TextButton(onClick = { crash = null }) { Text("Закрыть") } }
-                    )
+                    CameraRoot(lastCrash)
                 }
             }
         }
-    }
-
-    private fun crashFile() = java.io.File(filesDir, "last_crash.txt")
-
-    private fun installCrashLogger() {
-        val old = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { t, e ->
-            try {
-                crashFile().writeText(android.util.Log.getStackTraceString(e).take(6000))
-            } catch (_: Exception) {
-            }
-            old?.uncaughtException(t, e)
-        }
-    }
-
-    private fun readCrash(): String? = try {
-        val f = crashFile()
-        if (f.exists()) f.readText().also { f.delete() } else null
-    } catch (e: Exception) {
-        null
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -114,8 +86,9 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun CameraRoot() {
+fun CameraRoot(crash: String? = null) {
     val context = LocalContext.current
+    var showCrash by remember { mutableStateOf(crash != null) }
     var granted by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
@@ -130,7 +103,26 @@ fun CameraRoot() {
         if (!granted) launcher.launch(Manifest.permission.CAMERA)
     }
 
-    if (granted) {
+    if (showCrash && crash != null) {
+        AlertDialog(
+            onDismissRequest = { showCrash = false },
+            title = { Text("Прошлый запуск закрылся с ошибкой") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(crash.take(3500), fontSize = 11.sp)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("crash", crash))
+                    showCrash = false
+                }) { Text("Копировать") }
+            },
+            dismissButton = { TextButton(onClick = { showCrash = false }) { Text("Закрыть") } }
+        )
+        Box(Modifier.fillMaxSize())
+    } else if (granted) {
         CameraScreen()
     } else {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
