@@ -173,6 +173,9 @@ fun CameraScreen() {
     var moonHits by remember { mutableIntStateOf(0) }
     var solarZoomOk by remember { mutableStateOf(false) }
     var moonInfo by remember { mutableStateOf<MoonInfo?>(null) }
+    var moonDetail by remember {
+        mutableFloatStateOf(context.getSharedPreferences("scp", Context.MODE_PRIVATE).getFloat("moonDetail", 0.85f))
+    }
     var moonPreview by remember { mutableStateOf<ImageBitmap?>(null) }
     var locOk by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED)
@@ -530,12 +533,13 @@ fun CameraScreen() {
         }
         val f = digitalExtra
         val mInfo = if (solarMode && solarZoomOk) moonInfo else null
+        val detailSnap = moonDetail
         takePhoto(activity, controller) { uri ->
             if (f > 1.01f || mInfo != null) {
                 Thread {
                     if (f > 1.01f) digitalCrop(activity, uri, f)
                     if (mInfo != null) {
-                        val msg = MoonEnhance.run(activity, uri, mInfo)
+                        val msg = MoonEnhance.run(activity, uri, mInfo, detailSnap)
                         activity.runOnUiThread { showToast(msg) }
                     }
                     activity.runOnUiThread { lastUri = uri }
@@ -689,6 +693,28 @@ fun CameraScreen() {
                         contentDescription = null,
                         modifier = Modifier.align(Alignment.TopStart).padding(top = 52.dp, start = 12.dp)
                             .size(72.dp).clip(CircleShape).border(1.dp, Color(0x55FFFFFF), CircleShape)
+                    )
+                }
+                if (solarMode) {
+                    androidx.compose.material3.Slider(
+                        value = moonDetail,
+                        onValueChange = { moonDetail = it },
+                        onValueChangeFinished = {
+                            context.getSharedPreferences("scp", Context.MODE_PRIVATE)
+                                .edit().putFloat("moonDetail", moonDetail).apply()
+                        },
+                        valueRange = 0.3f..1f,
+                        colors = androidx.compose.material3.SliderDefaults.colors(
+                            thumbColor = Accent,
+                            activeTrackColor = Accent
+                        ),
+                        modifier = Modifier.align(Alignment.TopStart).padding(top = 126.dp, start = 4.dp).size(130.dp, 40.dp)
+                    )
+                    Text(
+                        "детали " + (moonDetail * 100).roundToInt() + "%",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        modifier = Modifier.align(Alignment.TopStart).padding(top = 164.dp, start = 14.dp)
                     )
                 }
                 // Moon ring (debug): follows the detected Moon
