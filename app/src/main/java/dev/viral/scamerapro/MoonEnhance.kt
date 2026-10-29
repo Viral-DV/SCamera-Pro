@@ -10,6 +10,7 @@ import android.media.ExifInterface
 import android.net.Uri
 import android.util.Log
 import java.util.Random
+import kotlin.math.exp
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -17,14 +18,14 @@ import kotlin.math.sqrt
 
 /** Adds real Moon detail (NASA map) to a saved photo: finds the Moon, matches rotation, blends detail + grain. */
 object MoonEnhance {
-    fun run(ctx: Context, uri: Uri, info: MoonInfo): String = try {
-        work(ctx, uri, info)
+    fun run(ctx: Context, uri: Uri, info: MoonInfo, detail: Float = 0.85f): String = try {
+        work(ctx, uri, info, detail)
     } catch (e: Throwable) {
         Log.e("SCameraPro", "moon enhance failed", e)
         ("ошибка: " + e.javaClass.simpleName + " " + (e.message ?: "") + " @" + (e.stackTrace.firstOrNull()?.let { it.methodName + ":" + it.lineNumber } ?: "")).take(110)
     }
 
-    private fun work(ctx: Context, uri: Uri, info: MoonInfo): String {
+    private fun work(ctx: Context, uri: Uri, info: MoonInfo, detail: Float): String {
         if (info.illum < 0.8) return "фаза " + (info.illum * 100).toInt() + "% < 80%"
         if (MoonRender.render(ctx, info, 8) == null) return "нет moon_map.jpg в assets"
         val cr = ctx.contentResolver
@@ -217,12 +218,20 @@ object MoonEnhance {
                 g += (sG + nz - g) * wSky
                 b += (sB + nz - b) * wSky
             }
+            if (d >= 0.97f) {
+                val q = (d - 1f) / 0.10f
+                val gl = 22f * exp(-q * q) // soft glow around the limb
+                r += gl
+                g += gl
+                b += gl * 0.96f
+            }
             if (d < 1f) {
                 val rx = x - rox
                 val ry = y - roy
                 if (rx in 0 until dia && ry in 0 until dia) {
-                    val aEdge = 1f - smooth(0.955f, 1f, d)
-                    val v = (rl[ry * dia + rx] * gain + rnd.nextGaussian().toFloat() * grain).coerceIn(0f, 255f)
+                    val aEdge = (1f - smooth(0.955f, 1f, d)) * detail
+                    val limb = 1f - 0.28f * d * d * d // darker towards the edge
+                    val v = (rl[ry * dia + rx] * gain * limb + rnd.nextGaussian().toFloat() * grain).coerceIn(0f, 255f)
                     r += (v * 1.03f - r) * aEdge
                     g += (v - g) * aEdge
                     b += (v * 0.96f - b) * aEdge
