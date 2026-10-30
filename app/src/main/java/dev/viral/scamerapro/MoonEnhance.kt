@@ -25,7 +25,7 @@ object MoonEnhance {
         ("ошибка: " + e.javaClass.simpleName + " " + (e.message ?: "") + " @" + (e.stackTrace.firstOrNull()?.let { it.methodName + ":" + it.lineNumber } ?: "")).take(110)
     }
 
-    private fun work(ctx: Context, uri: Uri, info: MoonInfo, detail: Float): String {
+    private fun work(ctx: Context, uri: Uri, info: MoonInfo, amount: Float): String {
         if (info.illum < 0.8) return "фаза " + (info.illum * 100).toInt() + "% < 80%"
         if (MoonRender.render(ctx, info, 8) == null) return "нет moon_map.jpg в assets"
         val cr = ctx.contentResolver
@@ -229,7 +229,7 @@ object MoonEnhance {
                 val rx = x - rox
                 val ry = y - roy
                 if (rx in 0 until dia && ry in 0 until dia) {
-                    val aEdge = (1f - smooth(0.955f, 1f, d)) * detail
+                    val aEdge = (1f - smooth(0.955f, 1f, d)) * amount
                     val limb = 1f - 0.28f * d * d * d // darker towards the edge
                     val v = (rl[ry * dia + rx] * gain * limb + rnd.nextGaussian().toFloat() * grain).coerceIn(0f, 255f)
                     r += (v * 1.03f - r) * aEdge
