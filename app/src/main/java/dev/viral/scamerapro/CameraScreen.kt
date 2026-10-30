@@ -539,7 +539,7 @@ fun CameraScreen() {
                 Thread {
                     if (f > 1.01f) digitalCrop(activity, uri, f)
                     if (mInfo != null) {
-                        val msg = MoonEnhance.run(activity, uri, mInfo, detailSnap)
+                        val msg = MoonEnhance.run(activity, uri, mInfo, 1f)
                         activity.runOnUiThread { showToast(msg) }
                     }
                     activity.runOnUiThread { lastUri = uri }
@@ -692,29 +692,7 @@ fun CameraScreen() {
                         bitmap = mp,
                         contentDescription = null,
                         modifier = Modifier.align(Alignment.TopStart).padding(top = 52.dp, start = 12.dp)
-                            .size(72.dp).clip(CircleShape).border(1.dp, Color(0x55FFFFFF), CircleShape)
-                    )
-                }
-                if (solarMode) {
-                    androidx.compose.material3.Slider(
-                        value = moonDetail,
-                        onValueChange = { moonDetail = it },
-                        onValueChangeFinished = {
-                            context.getSharedPreferences("scp", Context.MODE_PRIVATE)
-                                .edit().putFloat("moonDetail", moonDetail).apply()
-                        },
-                        valueRange = 0.3f..1f,
-                        colors = androidx.compose.material3.SliderDefaults.colors(
-                            thumbColor = Accent,
-                            activeTrackColor = Accent
-                        ),
-                        modifier = Modifier.align(Alignment.TopStart).padding(top = 126.dp, start = 4.dp).size(130.dp, 40.dp)
-                    )
-                    Text(
-                        "детали " + (moonDetail * 100).roundToInt() + "%",
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        modifier = Modifier.align(Alignment.TopStart).padding(top = 164.dp, start = 14.dp)
+                            .size(52.dp).clip(CircleShape).border(1.dp, Color(0x55FFFFFF), CircleShape)
                     )
                 }
                 // Moon ring (debug): follows the detected Moon
