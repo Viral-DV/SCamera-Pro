@@ -175,6 +175,7 @@ object MoonEnhance {
         val rl = FloatArray(dia * dia) { ((rfPx[it] shr 8) and 255).toFloat() }
         val blurred = blur(rl, dia, dia, max(2, dia / 40))
         val detail = FloatArray(rl.size) { rl[it] - blurred[it] }
+        val soft = blur(rl, dia, dia, max(1, dia / 220)) // slight softness like a real lens
 
         // brightness match and sky grain
         var rs = 0.0; var rc = 0; var ps = 0.0; var pc = 0
@@ -202,6 +203,7 @@ object MoonEnhance {
         val sR = if (skN > 0) skR.toFloat() / skN else 2f
         val sG = if (skN > 0) skG.toFloat() / skN else 2f
         val sB = if (skN > 0) skB.toFloat() / skN else 2f
+        val flat = max(8f, sR + 2f) // clean, flat sky level
         val rox = ccx - dia / 2
         val roy = ccy - dia / 2
         for (y in 0 until rh) for (x in 0 until rw) {
@@ -213,7 +215,7 @@ object MoonEnhance {
             var b = (c and 255).toFloat()
             val wSky = 1f - smooth(1.10f, 1.28f, d)
             if (wSky > 0f) {
-                val nz = rnd.nextGaussian().toFloat() * grain * 0.6f
+                val nz = 0f
                 r += (sR + nz - r) * wSky
                 g += (sG + nz - g) * wSky
                 b += (sB + nz - b) * wSky
@@ -229,17 +231,18 @@ object MoonEnhance {
                 val rx = x - rox
                 val ry = y - roy
                 if (rx in 0 until dia && ry in 0 until dia) {
-                    val aEdge = (1f - smooth(0.955f, 1f, d)) * amount
+                    val aEdge = (1f - smooth(0.93f, 1f, d)) * amount
                     val limb = 1f - 0.28f * d * d * d // darker towards the edge
-                    val v = (rl[ry * dia + rx] * gain * limb + rnd.nextGaussian().toFloat() * grain).coerceIn(0f, 255f)
-                    r += (v * 1.03f - r) * aEdge
+                    val v = (soft[ry * dia + rx] * gain * limb + rnd.nextGaussian().toFloat() * grain * 0.25f).coerceIn(0f, 255f)
+                    r += (v * 1.08f - r) * aEdge // warm tone like the real Moon
                     g += (v - g) * aEdge
-                    b += (v * 0.96f - b) * aEdge
+                    b += (v * 0.80f - b) * aEdge
                 }
             }
             rpx[y * rw + x] = (0xFF shl 24) or (r.toInt().coerceIn(0, 255) shl 16) or
                 (g.toInt().coerceIn(0, 255) shl 8) or b.toInt().coerceIn(0, 255)
         }
+        flattenSky(rpx, flat)
         rb.setPixels(rpx, 0, rw, 0, 0, rw, rh)
 
         // 6) put the piece back into the full photo and save
@@ -247,6 +250,13 @@ object MoonEnhance {
             BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inMutable = true })
         } ?: return "не удалось прочитать фото"
         val fullM = if (full.isMutable) full else full.copy(Bitmap.Config.ARGB_8888, true)
+        val fwid = fullM.width
+        val row = IntArray(fwid)
+        for (yy in 0 until fullM.height) { // clean the whole sky: no noise dots
+            fullM.getPixels(row, 0, fwid, 0, yy, fwid, 1)
+            flattenSky(row, flat)
+            fullM.setPixels(row, 0, fwid, 0, yy, fwid, 1)
+        }
         Canvas(fullM).drawBitmap(rb, left.toFloat(), top.toFloat(), null)
         cr.openOutputStream(uri, "wt")?.use { fullM.compress(Bitmap.CompressFormat.JPEG, 95, it) }
         cr.openFileDescriptor(uri, "rw")?.use { pfd ->
@@ -255,6 +265,23 @@ object MoonEnhance {
             ex.saveAttributes()
         }
         return "готово: совпадение " + String.format("%.2f", bestS) + ", угол " + bestA.toInt() + (if (bestM) " (зеркало)" else "")
+    }
+
+    /** Pulls very dark pixels (sky noise) to one flat level; brighter pixels stay as they are. */
+    private fun flattenSky(a: IntArray, flat: Float) {
+        for (i in a.indices) {
+            val c = a[i]
+            val r = (c shr 16) and 255
+            val g = (c shr 8) and 255
+            val b = c and 255
+            val l = (r * 77 + g * 150 + b * 29) shr 8
+            if (l >= 42) continue
+            val t = smooth(20f, 42f, l.toFloat())
+            val nr = (flat + (r - flat) * t).toInt().coerceIn(0, 255)
+            val ng = (flat + (g - flat) * t).toInt().coerceIn(0, 255)
+            val nb = (flat + (b - flat) * t).toInt().coerceIn(0, 255)
+            a[i] = (0xFF shl 24) or (nr shl 16) or (ng shl 8) or nb
+        }
     }
 
     private fun smooth(e0: Float, e1: Float, x: Float): Float {
