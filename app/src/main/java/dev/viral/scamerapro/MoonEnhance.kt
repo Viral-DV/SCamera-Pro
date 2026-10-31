@@ -10,7 +10,11 @@ import android.media.ExifInterface
 import android.net.Uri
 import android.util.Log
 import java.util.Random
+import kotlin.math.acos
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.exp
+import kotlin.math.sin
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -26,7 +30,8 @@ object MoonEnhance {
     }
 
     private fun work(ctx: Context, uri: Uri, info: MoonInfo, amount: Float): String {
-        if (info.illum < 0.55) return "фаза " + (info.illum * 100).toInt() + "% < 55%"
+        if (info.illum < 0.10) return "фаза " + (info.illum * 100).toInt() + "% слишком узкая"
+        val useFit = info.illum < 0.55 // partial phases: fit the disc from the lit shape
         if (MoonRender.render(ctx, info, 8) == null) return "нет moon_map.jpg в assets"
         val cr = ctx.contentResolver
         val orient = cr.openInputStream(uri)?.use {
@@ -78,10 +83,70 @@ object MoonEnhance {
         }
         val bw = bx1 - bx0 + 1
         val bh = by1 - by0 + 1
-        if (best < 200 || bw.toFloat() / bh !in 0.55f..1.8f) return "пятно не круглое: ${bw}x$bh, $best"
-        val cxF = ((bx0 + bx1 + 1) / 2f * 4f).toInt()
-        val cyF = ((by0 + by1 + 1) / 2f * 4f).toInt()
-        val rad = max(bw, bh) * 2f // radius in full-res pixels (bbox/2 * 4)
+        if (best < 60 || (!useFit && bw.toFloat() / bh !in 0.55f..1.8f)) return "пятно не круглое: ${bw}x$bh, $best"
+        var cxF = ((bx0 + bx1 + 1) / 2f * 4f).toInt()
+        var cyF = ((by0 + by1 + 1) / 2f * 4f).toInt()
+        var rad = max(bw, bh) * 2f // radius in full-res pixels (bbox/2 * 4)
+        var inf = info
+        if (useFit) {
+            // lit blob: centroid and area (1/4 scale)
+            var cnt = 0
+            var sxx = 0.0
+            var syy = 0.0
+            for (yy in by0..by1) for (xx in bx0..bx1) if (lum[yy * sw + xx] >= thr) { cnt++; sxx += xx; syy += yy }
+            if (cnt < 40) return "серп слишком тонкий"
+            val bxc = sxx / cnt + 0.5
+            val byc = syy / cnt + 0.5
+            val rs = sqrt(cnt / (Math.PI * info.illum)) // lit area = illum * disc area
+            val alphaP = acos((2 * info.illum - 1).coerceIn(-1.0, 1.0))
+            val sa = sin(alphaP)
+            val ca = cos(alphaP)
+            var cm = 0.0
+            var cmN = 0
+            for (iy in -24..24) for (ix in -24..24) {
+                val nx = ix / 24.0
+                val ny = iy / 24.0
+                val d2 = nx * nx + ny * ny
+                if (d2 > 1.0) continue
+                if (nx * sa + sqrt(1 - d2) * ca > 0) { cm += nx; cmN++ }
+            }
+            cm /= max(1, cmN)
+            fun iou(deg: Double): Double {
+                val ph = Math.toRadians(deg)
+                val dx = cos(ph)
+                val dy = sin(ph)
+                val c2x = bxc - rs * cm * dx
+                val c2y = byc - rs * cm * dy
+                val lx = sa * dx
+                val ly = sa * dy
+                var inter = 0
+                var model = 0
+                for (y in (c2y - rs).toInt()..(c2y + rs).toInt()) for (x in (c2x - rs).toInt()..(c2x + rs).toInt()) {
+                    val nx = (x + 0.5 - c2x) / rs
+                    val ny = (y + 0.5 - c2y) / rs
+                    val d2 = nx * nx + ny * ny
+                    if (d2 > 1.0) continue
+                    if (nx * lx + ny * ly + sqrt(1 - d2) * ca > 0) {
+                        model++
+                        if (x in 0 until sw && y in 0 until sh && lum[y * sw + x] >= thr) inter++
+                    }
+                }
+                return if (model == 0) 0.0 else inter.toDouble() / (model + cnt - inter)
+            }
+            var bestPhi = 0.0
+            var bestIou = -1.0
+            var dg = 0.0
+            while (dg < 360.0) { val v = iou(dg); if (v > bestIou) { bestIou = v; bestPhi = dg }; dg += 5.0 }
+            var dg2 = bestPhi - 5.0
+            while (dg2 <= bestPhi + 5.0) { val v = iou(dg2); if (v > bestIou) { bestIou = v; bestPhi = dg2 }; dg2 += 1.0 }
+            if (bestIou < 0.3) return "серп: форма не совпала (" + String.format("%.2f", bestIou) + ")"
+            val ph = Math.toRadians(bestPhi)
+            cxF = ((bxc - rs * cm * cos(ph)) * 4).toInt()
+            cyF = ((byc - rs * cm * sin(ph)) * 4).toInt()
+            rad = (rs * 4).toFloat()
+            val pb = Math.toDegrees(atan2(-cos(ph), -sin(ph)))
+            inf = info.copy(brightLimbDeg = (pb + 360.0) % 360.0)
+        }
         val dia = (rad * 2).toInt()
         if (dia < 64 || dia > 2000) return "диск $dia px вне 64..2000"
 
@@ -120,7 +185,7 @@ object MoonEnhance {
             nx * nx + ny * ny < 0.5f
         }
         fun score(angle: Double, mir: Boolean): Double {
-            val r = MoonRender.render(ctx, info.copy(northDeg = angle), n, mir) ?: return -1.0
+            val r = MoonRender.render(ctx, inf.copy(northDeg = angle), n, mir) ?: return -1.0
             val rp = IntArray(n * n)
             r.getPixels(rp, 0, n, 0, 0, n, n)
             return ncc(realL, IntArray(n * n) { (rp[it] shr 8) and 255 }, mask)
@@ -146,7 +211,7 @@ object MoonEnhance {
         if (bestS < 0.15) return "нет совпадения с картой (" + String.format("%.2f", bestS) + ")"
 
         // 3b) fine centre: try small shifts of the real crop against the matched reference
-        val refSmall = MoonRender.render(ctx, info.copy(northDeg = bestA), n, bestM)
+        val refSmall = MoonRender.render(ctx, inf.copy(northDeg = bestA), n, bestM)
         if (refSmall != null) {
             val rp = IntArray(n * n)
             refSmall.getPixels(rp, 0, n, 0, 0, n, n)
@@ -169,7 +234,7 @@ object MoonEnhance {
         }
 
         // 4) full-size reference, high-pass detail
-        val ref = MoonRender.render(ctx, info.copy(northDeg = bestA), dia, bestM) ?: return "не удалось прочитать фото"
+        val ref = MoonRender.render(ctx, inf.copy(northDeg = bestA), dia, bestM) ?: return "не удалось прочитать фото"
         val rfPx = IntArray(dia * dia)
         ref.getPixels(rfPx, 0, dia, 0, 0, dia, dia)
         val rl = FloatArray(dia * dia) { ((rfPx[it] shr 8) and 255).toFloat() }
@@ -183,7 +248,7 @@ object MoonEnhance {
         for (y in 0 until rh) for (x in 0 until rw) {
             val d = hypot(x + 0.5f - ccx, y + 0.5f - ccy) / rad
             val l = (((rpx[y * rw + x] shr 8) and 255)).toDouble()
-            if (d < 0.9f) { ps += l; pc++ } else if (d > 1.1f) { ss += l; ss2 += l * l; sc++ }
+            if (d < 0.9f) { if (l >= thr) { ps += l; pc++ } } else if (d > 1.1f) { ss += l; ss2 += l * l; sc++ }
         }
         for (i in rl.indices) if (rl[i] > 8f) { rs += rl[i]; rc++ }
         val gain = if (rc > 0 && pc > 0) (min(ps / pc, 190.0) / (rs / rc)).toFloat().coerceIn(0.3f, 3f) else 1f
