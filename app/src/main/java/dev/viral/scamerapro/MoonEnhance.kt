@@ -26,7 +26,7 @@ object MoonEnhance {
     }
 
     private fun work(ctx: Context, uri: Uri, info: MoonInfo, amount: Float): String {
-        if (info.illum < 0.8) return "фаза " + (info.illum * 100).toInt() + "% < 80%"
+        if (info.illum < 0.55) return "фаза " + (info.illum * 100).toInt() + "% < 55%"
         if (MoonRender.render(ctx, info, 8) == null) return "нет moon_map.jpg в assets"
         val cr = ctx.contentResolver
         val orient = cr.openInputStream(uri)?.use {
@@ -78,7 +78,7 @@ object MoonEnhance {
         }
         val bw = bx1 - bx0 + 1
         val bh = by1 - by0 + 1
-        if (best < 200 || bw.toFloat() / bh !in 0.7f..1.4f) return "пятно не круглое: ${bw}x$bh, $best"
+        if (best < 200 || bw.toFloat() / bh !in 0.55f..1.8f) return "пятно не круглое: ${bw}x$bh, $best"
         val cxF = ((bx0 + bx1 + 1) / 2f * 4f).toInt()
         val cyF = ((by0 + by1 + 1) / 2f * 4f).toInt()
         val rad = max(bw, bh) * 2f // radius in full-res pixels (bbox/2 * 4)
@@ -154,9 +154,9 @@ object MoonEnhance {
             var bs = -2.0
             var bdx = 0
             var bdy = 0
-            for (sy in -2..2) for (sx in -2..2) {
-                val px0 = (ccx - rad + sx * 0.03f * dia).toInt().coerceIn(0, max(0, rw - dia))
-                val py0 = (ccy - rad + sy * 0.03f * dia).toInt().coerceIn(0, max(0, rh - dia))
+            for (sy in -3..3) for (sx in -3..3) {
+                val px0 = (ccx - rad + sx * 0.04f * dia).toInt().coerceIn(0, max(0, rw - dia))
+                val py0 = (ccy - rad + sy * 0.04f * dia).toInt().coerceIn(0, max(0, rh - dia))
                 val c2 = Bitmap.createBitmap(rb, px0, py0, min(dia, rw - px0), min(dia, rh - py0))
                 val s2 = Bitmap.createScaledBitmap(c2, n, n, true)
                 val sp = IntArray(n * n)
@@ -164,8 +164,8 @@ object MoonEnhance {
                 val sc2 = ncc(IntArray(n * n) { (sp[it] shr 8) and 255 }, rL, mask)
                 if (sc2 > bs) { bs = sc2; bdx = sx; bdy = sy }
             }
-            ccx += (bdx * 0.03f * dia).toInt()
-            ccy += (bdy * 0.03f * dia).toInt()
+            ccx += (bdx * 0.04f * dia).toInt()
+            ccy += (bdy * 0.04f * dia).toInt()
         }
 
         // 4) full-size reference, high-pass detail
