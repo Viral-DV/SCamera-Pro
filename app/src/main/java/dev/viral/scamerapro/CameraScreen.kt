@@ -15,6 +15,10 @@ import android.util.Log
 import android.view.View
 import androidx.activity.ComponentActivity
 import android.Manifest
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.draw.clipToBounds
 import android.view.HapticFeedbackConstants
 import androidx.compose.ui.platform.LocalView
@@ -171,6 +175,9 @@ fun CameraScreen() {
     var moon by remember { mutableStateOf<MoonHit?>(null) }
     var moonMiss by remember { mutableIntStateOf(0) }
     var moonHits by remember { mutableIntStateOf(0) }
+    var moonOverlay by remember { mutableStateOf<ImageBitmap?>(null) }
+    var moonOrient by remember { mutableStateOf<MoonLive.Orient?>(null) }
+    val moonPresent by remember { derivedStateOf { moon != null } }
     var solarZoomOk by remember { mutableStateOf(false) }
     var moonInfo by remember { mutableStateOf<MoonInfo?>(null) }
     var moonDetail by remember {
@@ -199,12 +206,13 @@ fun CameraScreen() {
                     if (hit != null) {
                         moonMiss = 0
                         moonHits++
-                        if (moonHits >= 3) {
+                        if (moonHits >= 2) {
                             val p = moon
                             moon = if (p == null) hit else MoonHit(
-                                p.cx + (hit.cx - p.cx) * 0.3f,
-                                p.cy + (hit.cy - p.cy) * 0.3f,
-                                p.r + (hit.r - p.r) * 0.3f
+                                p.cx + (hit.cx - p.cx) * 0.6f,
+                                p.cy + (hit.cy - p.cy) * 0.6f,
+                                p.r + (hit.r - p.r) * 0.6f,
+                                hit.phi
                             )
                         }
                     } else {
@@ -605,7 +613,7 @@ fun CameraScreen() {
         if (textFound) 1f else 0f, spring(dampingRatio = 0.55f, stiffness = 380f), label = "tBtn"
     )
 
-    val moonLocked = solarMode && solarZoomOk && moon != null
+    val moonLocked = solarMode && solarZoomOk && moonPresent
     LaunchedEffect(displayZoom >= 7f) { solarZoomOk = displayZoom >= 7f }
     LaunchedEffect(solarMode, solarZoomOk) {
         if (!(solarMode && solarZoomOk)) { moon = null; moonMiss = 0; moonHits = 0 }
@@ -619,13 +627,38 @@ fun CameraScreen() {
     }
     LaunchedEffect(moonInfo) {
         val mi = moonInfo
+        MoonLive.illum = mi?.illum ?: 1.0
         moonPreview = if (mi == null) null else withContext(Dispatchers.Default) {
             MoonRender.render(context, mi, 128)?.asImageBitmap()
         }
     }
+    LaunchedEffect(solarMode, solarZoomOk, moonPresent) {
+        if (moonPresent && solarMode && solarZoomOk) {
+            while (true) {
+                val hit = moon
+                val mi = moonInfo
+                val tv = findTextureView(pv[0])
+                if (hit != null && mi != null && tv != null && tv.isAvailable && tv.width > 0) {
+                    val snap = tv.getBitmap(480, (480f * tv.height / tv.width).toInt().coerceAtLeast(64))
+                    val res = withContext(Dispatchers.Default) {
+                        val o = MoonLive.orientation(context, mi, snap, hit)
+                        if (o != null && o.score >= 0.15) Pair(o, MoonLive.overlay(context, mi, o, hit)?.asImageBitmap()) else null
+                    }
+                    if (res != null) {
+                        moonOrient = res.first
+                        moonOverlay = res.second
+                    }
+                }
+                delay(2000)
+            }
+        } else {
+            moonOverlay = null
+            moonOrient = null
+        }
+    }
     LaunchedEffect(moonLocked) { delay(150); applyMoonExposure(controller, moonLocked, ranges) }
-    LaunchedEffect(moon != null) {
-        if (solarMode && moon != null) showToast("Луна найдена, экспозиция зафиксирована")
+    LaunchedEffect(moonPresent) {
+        if (solarMode && moonPresent) showToast("Луна найдена, экспозиция зафиксирована")
     }
 
     CompositionLocalProvider(LocalGlass provides glass) {
@@ -695,20 +728,39 @@ fun CameraScreen() {
                             .size(52.dp).clip(CircleShape).border(1.dp, Color(0x55FFFFFF), CircleShape)
                     )
                 }
-                // Moon ring (debug): follows the detected Moon
-                val mh = moon
-                if (solarMode && mh != null) {
+                // Live Moon: covers the real one in the preview and follows every analysed frame
+                if (solarMode) {
                     androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
-                        val c = Offset(
-                            size.width / 2f + (mh.cx - 0.5f) * size.width * digitalExtra,
-                            size.height / 2f + (mh.cy - 0.5f) * size.height * digitalExtra
-                        )
-                        drawCircle(
-                            Color.White.copy(alpha = 0.85f),
-                            radius = mh.r * size.width * digitalExtra * 1.15f,
-                            center = c,
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(1.5.dp.toPx())
-                        )
+                        val mh = moon ?: return@Canvas
+                        val ov = moonOverlay
+                        val cx = size.width / 2f + (mh.cx - 0.5f) * size.width * digitalExtra
+                        val cy = size.height / 2f + (mh.cy - 0.5f) * size.height * digitalExtra
+                        val rr = mh.r * size.width * digitalExtra
+                        if (ov != null) {
+                            drawCircle(
+                                brush = Brush.radialGradient(
+                                    0f to Color(0xFF0A0A0A), 0.78f to Color(0xFF0A0A0A), 1f to Color.Transparent,
+                                    center = Offset(cx, cy), radius = rr * 1.4f
+                                ),
+                                radius = rr * 1.4f,
+                                center = Offset(cx, cy)
+                            )
+                            val d = (rr * 2f).roundToInt().coerceAtLeast(2)
+                            drawImage(
+                                ov,
+                                dstOffset = IntOffset((cx - rr).roundToInt(), (cy - rr).roundToInt()),
+                                dstSize = IntSize(d, d),
+                                colorFilter = warmFilter,
+                                filterQuality = FilterQuality.Medium
+                            )
+                        } else {
+                            drawCircle(
+                                Color.White.copy(alpha = 0.85f),
+                                radius = rr * 1.15f,
+                                center = Offset(cx, cy),
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(1.5.dp.toPx())
+                            )
+                        }
                     }
                 }
 
@@ -1304,3 +1356,14 @@ private fun SolarModeIcon(on: Boolean, modifier: Modifier = Modifier) {
         drawPath(Path.combine(PathOperation.Difference, outer, inner), if (on) Accent else Color.White)
     }
 }
+
+private val warmFilter = ColorFilter.colorMatrix(
+    ColorMatrix(
+        floatArrayOf(
+            0.95f, 0f, 0f, 0f, 0f,
+            0f, 0.88f, 0f, 0f, 0f,
+            0f, 0f, 0.70f, 0f, 0f,
+            0f, 0f, 0f, 1f, 0f
+        )
+    )
+)
