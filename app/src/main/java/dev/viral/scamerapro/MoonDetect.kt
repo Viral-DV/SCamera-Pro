@@ -10,14 +10,19 @@ import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.view.LifecycleCameraController
+import kotlin.math.acos
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 /** Moon found in the frame: centre and radius, 0..1 relative to the visible (upright) picture width/height. */
-data class MoonHit(val cx: Float, val cy: Float, val r: Float)
+data class MoonHit(val cx: Float, val cy: Float, val r: Float, val phi: Float = Float.NaN)
 
 object MoonDetect {
     /** Finds the biggest bright blob on a dark background (cheap: 64-wide grid on the Y plane). */
-    fun find(image: ImageProxy): MoonHit? {
+    fun find(image: ImageProxy, illum: Double = 1.0): MoonHit? {
         val crop = image.cropRect
         val cw = crop.width()
         val ch = crop.height()
@@ -91,18 +96,103 @@ object MoonDetect {
         if (bestCount < 6 || bestCount > gw * gh * 35 / 100) return null
         val bw = bMaxX - bMinX + 1
         val bh = bMaxY - bMinY + 1
-        if (max(bw, bh) < 3 || bestCount.toFloat() / (bw * bh) < 0.3f) return null
-
-        val u = (bSx.toFloat() / bestCount + 0.5f) / gw
-        val v = (bSy.toFloat() / bestCount + 0.5f) / gh
-        val rCells = max(bw, bh) / 2f
-        val rot = image.imageInfo.rotationDegrees
-        return when (rot) {
-            90 -> MoonHit(1f - v, u, rCells / gh)
-            270 -> MoonHit(v, 1f - u, rCells / gh)
-            180 -> MoonHit(1f - u, 1f - v, rCells / gw)
-            else -> MoonHit(u, v, rCells / gw)
+        val full = illum >= 0.75
+        if (max(bw, bh) < 3) return null
+        if (full && bestCount.toFloat() / (bw * bh) < 0.3f) return null
+        val cu: Float
+        val cv: Float
+        val rC: Float
+        var dxb = 0f
+        var dyb = 0f
+        var hasPhi = false
+        if (full) {
+            cu = (bMinX + bMaxX + 1) / 2f
+            cv = (bMinY + bMaxY + 1) / 2f
+            rC = max(bw, bh) / 2f
+        } else {
+            val f = fitPartial(lum, gw, thr, bMinX, bMaxX, bMinY, bMaxY, illum) ?: return null
+            cu = f[0]; cv = f[1]; rC = f[2]; dxb = f[3]; dyb = f[4]; hasPhi = true
         }
+        val u = cu / gw
+        val v = cv / gh
+        val rot = image.imageInfo.rotationDegrees
+        val (dxu, dyu) = when (rot) {
+            90 -> -dyb to dxb
+            270 -> dyb to -dxb
+            180 -> -dxb to -dyb
+            else -> dxb to dyb
+        }
+        val phi = if (hasPhi) atan2(dyu, dxu) else Float.NaN
+        return when (rot) {
+            90 -> MoonHit(1f - v, u, rC / gh, phi)
+            270 -> MoonHit(v, 1f - u, rC / gh, phi)
+            180 -> MoonHit(1f - u, 1f - v, rC / gw, phi)
+            else -> MoonHit(u, v, rC / gw, phi)
+        }
+    }
+
+    /** Partial phase: disc size from the lit area, centre and light direction from the lit shape. [cu, cv, r, dx, dy] */
+    private fun fitPartial(
+        lum: IntArray, gw: Int, thr: Int,
+        bx0: Int, bx1: Int, by0: Int, by1: Int, illum: Double
+    ): FloatArray? {
+        val gh = lum.size / gw
+        var cnt = 0
+        var sx = 0.0
+        var sy = 0.0
+        for (y in by0..by1) for (x in bx0..bx1) if (lum[y * gw + x] >= thr) { cnt++; sx += x; sy += y }
+        if (cnt < 8) return null
+        val bxc = sx / cnt + 0.5
+        val byc = sy / cnt + 0.5
+        val rs = sqrt(cnt / (Math.PI * illum))
+        val ap = acos((2 * illum - 1).coerceIn(-1.0, 1.0))
+        val sa = sin(ap)
+        val ca = cos(ap)
+        var cm = 0.0
+        var cmN = 0
+        for (iy in -12..12) for (ix in -12..12) {
+            val nx = ix / 12.0
+            val ny = iy / 12.0
+            val d2 = nx * nx + ny * ny
+            if (d2 > 1.0) continue
+            if (nx * sa + sqrt(1 - d2) * ca > 0) { cm += nx; cmN++ }
+        }
+        cm /= max(1, cmN)
+        fun iou(deg: Double): Double {
+            val ph = Math.toRadians(deg)
+            val dx = cos(ph)
+            val dy = sin(ph)
+            val c2x = bxc - rs * cm * dx
+            val c2y = byc - rs * cm * dy
+            val lx = sa * dx
+            val ly = sa * dy
+            var inter = 0
+            var model = 0
+            for (y in (c2y - rs).toInt()..(c2y + rs).toInt()) for (x in (c2x - rs).toInt()..(c2x + rs).toInt()) {
+                val nx = (x + 0.5 - c2x) / rs
+                val ny = (y + 0.5 - c2y) / rs
+                val d2 = nx * nx + ny * ny
+                if (d2 > 1.0) continue
+                if (nx * lx + ny * ly + sqrt(1 - d2) * ca > 0) {
+                    model++
+                    if (x in 0 until gw && y in 0 until gh && lum[y * gw + x] >= thr) inter++
+                }
+            }
+            return if (model == 0) 0.0 else inter.toDouble() / (model + cnt - inter)
+        }
+        var bestPhi = 0.0
+        var bestIou = -1.0
+        var dg = 0.0
+        while (dg < 360.0) { val q = iou(dg); if (q > bestIou) { bestIou = q; bestPhi = dg }; dg += 10.0 }
+        var dg2 = bestPhi - 10.0
+        val base = bestPhi
+        while (dg2 <= base + 10.0) { val q = iou(dg2); if (q > bestIou) { bestIou = q; bestPhi = dg2 }; dg2 += 2.0 }
+        if (bestIou < 0.3) return null
+        val ph = Math.toRadians(bestPhi)
+        return floatArrayOf(
+            (bxc - rs * cm * cos(ph)).toFloat(), (byc - rs * cm * sin(ph)).toFloat(), rs.toFloat(),
+            cos(ph).toFloat(), sin(ph).toFloat()
+        )
     }
 }
 
@@ -122,12 +212,12 @@ class CameraAnalyzer(
             return
         }
         val now = SystemClock.elapsedRealtime()
-        if (now - last < 90) {
+        if (now - last < 8) {
             image.close()
             return
         }
         last = now
-        val hit = try { MoonDetect.find(image) } catch (e: Exception) { null }
+        val hit = try { MoonDetect.find(image, MoonLive.illum) } catch (e: Exception) { null }
         image.close()
         main.post { onMoon(hit) }
     }
