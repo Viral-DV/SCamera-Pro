@@ -641,7 +641,7 @@ fun CameraScreen() {
                 if (hit != null && mi != null && tv != null && tv.isAvailable && tv.width > 0) {
                     val snap = tv.getBitmap(480, (480f * tv.height / tv.width).toInt().coerceAtLeast(64))
                     val res = withContext(Dispatchers.Default) {
-                        val o = MoonLive.orientation(context, mi, snap, hit)
+                        val o = if (snap == null) null else MoonLive.orientation(context, mi, snap, hit)
                         if (o != null && o.score >= 0.15) Pair(o, MoonLive.overlay(context, mi, o, hit)?.asImageBitmap()) else null
                     }
                     if (res != null) {
