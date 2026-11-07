@@ -327,6 +327,7 @@ object MoonEnhance {
         cr.openFileDescriptor(uri, "rw")?.use { pfd ->
             val ex = ExifInterface(pfd.fileDescriptor)
             ex.setAttribute(ExifInterface.TAG_ORIENTATION, orient.toString())
+            ex.setAttribute(ExifInterface.TAG_USER_COMMENT, "Solar-Mode: Moon enhanced")
             ex.saveAttributes()
         }
         return "готово: совпадение " + String.format("%.2f", bestS) + ", угол " + bestA.toInt() + (if (bestM) " (зеркало)" else "")
