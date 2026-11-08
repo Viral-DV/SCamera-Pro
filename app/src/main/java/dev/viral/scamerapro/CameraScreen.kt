@@ -666,7 +666,7 @@ fun CameraScreen() {
             val screenW = constraints.maxWidth.toFloat()
             val screenH = constraints.maxHeight.toFloat()
             val cutoutTop = WindowInsets.displayCutout.getTop(density).toFloat()
-            val topBarH = max(cutoutTop, with(density) { 24.dp.toPx() }) + with(density) { 46.dp.toPx() }
+            val topBarH = with(density) { 67.dp.toPx() }
             val effRatio = if (mode == Mode.VIDEO) FrameRatio.R916 else ratio
             val previewTop = if (effRatio == FrameRatio.FULL) 0f else topBarH
             val rawH = when (effRatio) {
@@ -968,47 +968,66 @@ fun CameraScreen() {
                     )
             ) {
                 Row(
-                    Modifier.align(Alignment.BottomEnd).padding(end = 22.dp, bottom = 9.dp).alpha(controlsAlpha),
-                    horizontalArrangement = Arrangement.spacedBy(22.dp),
+                    Modifier.align(Alignment.BottomEnd).padding(end = 10.dp, bottom = 8.dp).alpha(controlsAlpha),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    BoltIcon(
-                        on = flashOn,
-                        modifier = Modifier.size(Dims.topIcon).clickable { toggleFlash() }
-                    )
+                    TopSlot { BoltIcon(on = flashOn, modifier = Modifier.size(Dims.topIcon).clickable { toggleFlash() }) }
                     if (mode == Mode.VIDEO) {
-                        Text(
-                            "${videoRes.label}\n$effFps",
-                            color = Color.White,
-                            fontSize = 12.sp,
-                            lineHeight = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            modifier = Modifier.clickable { showVideoSize = true }
-                        )
-                    } else {
-                        Text(
-                            "12M",
-                            color = Color.White,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.clickable { showToast("50M недоступен: Samsung не открывает его сторонним приложениям") }
-                        )
-                    }
-                    if (!backCamera) {
-                        BeautyIcon(
-                            Modifier.size(Dims.topIcon).clickable { showToast("Эффекты для селфи появятся позже") }
-                        )
-                    }
-                    SolarModeIcon(
-                        on = solarMode,
-                        modifier = Modifier.size(Dims.topIcon).clickable {
-                            solarMode = !solarMode
-                            buzz(HapticFeedbackConstants.CONTEXT_CLICK)
-                            if (solarMode && !locOk) locLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
-                            showToast(if (solarMode) "Solar-Mode включён: Луна ищется от 7x" else "Solar-Mode выключен")
+                        TopSlot {
+                            Text(
+                                "${videoRes.label}\n$effFps",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                lineHeight = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                modifier = Modifier.clickable { showVideoSize = true }
+                            )
                         }
-                    )
+                    } else {
+                        TopSlot {
+                            TimerIcon(
+                                Modifier.size(Dims.topIcon).clickable {
+                                    buzz(HapticFeedbackConstants.CLOCK_TICK)
+                                    timerSec = when (timerSec) { 0 -> 2; 2 -> 5; 5 -> 10; else -> 0 }
+                                },
+                                color = if (timerSec > 0) Accent else Color.White
+                            )
+                        }
+                        TopSlot {
+                            Text(
+                                ratio.label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                                modifier = Modifier.clickable { quickOpen = true; ratioPicker = true }
+                            )
+                        }
+                        TopSlot {
+                            Text(
+                                "12M", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                                modifier = Modifier.clickable { showToast("50M недоступен: Samsung не открывает его сторонним приложениям") }
+                            )
+                        }
+                        TopSlot {
+                            Text(
+                                if (pro.evIndex == 0) "±0.0" else String.format(Locale.US, "%+.1f", pro.evIndex * evStep),
+                                color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                                modifier = Modifier.clickable { showToast("Экспозиция: ползунок у кольца фокуса") }
+                            )
+                        }
+                        TopSlot { MotionIcon(Modifier.size(Dims.topIcon).clickable { showToast("Анимированное фото появится позже") }) }
+                        TopSlot { EffectsIcon(Modifier.size(Dims.topIcon).clickable { showToast("Эффекты появятся позже") }) }
+                    }
+                    TopSlot { FaceIcon(Modifier.size(Dims.topIcon).clickable { showToast("Эффекты для селфи появятся позже") }) }
+                    TopSlot {
+                        SolarModeIcon(
+                            on = solarMode,
+                            modifier = Modifier.size(Dims.topIcon).clickable {
+                                solarMode = !solarMode
+                                buzz(HapticFeedbackConstants.CONTEXT_CLICK)
+                                if (solarMode && !locOk) locLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                                showToast(if (solarMode) "Solar-Mode включён: Луна ищется от 7x" else "Solar-Mode выключен")
+                            }
+                        )
+                    }
                 }
             }
 
@@ -1018,7 +1037,7 @@ fun CameraScreen() {
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(bottom = 8.dp),
+                    .padding(bottom = 46.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // One slot, five states: pill / expanded ruler / quick panel / Pro ruler / selfie modes
@@ -1050,7 +1069,7 @@ fun CameraScreen() {
                                         touchZoom()
                                     }
                                 )
-                                DotsButtonSmall(Modifier.align(Alignment.CenterEnd).padding(end = 26.dp)) { quickOpen = true }
+                                DotsButtonSmall(Modifier.align(Alignment.CenterEnd).padding(end = 20.dp)) { quickOpen = true }
                             }
 
                             RowState.FRONT -> Box(Modifier.fillMaxWidth().height(44.dp), contentAlignment = Alignment.Center) {
@@ -1065,7 +1084,7 @@ fun CameraScreen() {
                                         GroupIcon(Modifier.size(22.dp))
                                     }
                                 }
-                                DotsButtonSmall(Modifier.align(Alignment.CenterEnd).padding(end = 26.dp)) { quickOpen = true }
+                                DotsButtonSmall(Modifier.align(Alignment.CenterEnd).padding(end = 20.dp)) { quickOpen = true }
                             }
 
                             RowState.EXPANDED -> ZoomExpanded(
@@ -1149,10 +1168,10 @@ fun CameraScreen() {
                     }
                 }
 
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(22.dp))
 
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 34.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = 37.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1205,7 +1224,7 @@ fun CameraScreen() {
                     }
                 }
 
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(21.dp))
                 if (mode == Mode.PRO) {
                     Text(
                         "‹   ПРО",
@@ -1234,7 +1253,7 @@ fun CameraScreen() {
                         if (name == "ПРО") mode = Mode.PRO else showToast("$name появится позже")
                     },
                     onEdit = { showToast("Редактор режимов появится позже") },
-                    modifier = Modifier.navigationBarsPadding().padding(bottom = 62.dp)
+                    modifier = Modifier.navigationBarsPadding().padding(bottom = 94.dp)
                 )
             }
 
@@ -1367,3 +1386,53 @@ private val warmFilter = ColorFilter.colorMatrix(
         )
     )
 )
+
+@Composable
+private fun TopSlot(content: @Composable () -> Unit) {
+    Box(Modifier.size(36.dp, 30.dp), contentAlignment = Alignment.Center) { content() }
+}
+
+@Composable
+private fun FaceIcon(modifier: Modifier = Modifier) {
+    androidx.compose.foundation.Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        val st = androidx.compose.ui.graphics.drawscope.Stroke(1.7.dp.toPx())
+        drawCircle(Color.White, radius = w * 0.46f, style = st)
+        drawCircle(Color.White, radius = w * 0.045f, center = Offset(w * 0.36f, h * 0.42f))
+        drawCircle(Color.White, radius = w * 0.045f, center = Offset(w * 0.64f, h * 0.42f))
+        drawArc(
+            Color.White, 20f, 140f, false,
+            topLeft = Offset(w * 0.3f, h * 0.35f),
+            size = androidx.compose.ui.geometry.Size(w * 0.4f, h * 0.35f),
+            style = st
+        )
+    }
+}
+
+@Composable
+private fun MotionIcon(modifier: Modifier = Modifier) {
+    androidx.compose.foundation.Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        drawCircle(Color.White, radius = w * 0.46f, style = androidx.compose.ui.graphics.drawscope.Stroke(1.7.dp.toPx()))
+        val tri = Path().apply {
+            moveTo(w * 0.42f, h * 0.32f)
+            lineTo(w * 0.42f, h * 0.68f)
+            lineTo(w * 0.70f, h * 0.5f)
+            close()
+        }
+        drawPath(tri, Color.White)
+    }
+}
+
+@Composable
+private fun EffectsIcon(modifier: Modifier = Modifier) {
+    androidx.compose.foundation.Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        drawCircle(Color.White, radius = w * 0.34f, center = Offset(w * 0.44f, h * 0.42f), style = androidx.compose.ui.graphics.drawscope.Stroke(1.7.dp.toPx()))
+        drawCircle(Color.White, radius = w * 0.2f, center = Offset(w * 0.68f, h * 0.66f))
+        for (i in 0..2) drawCircle(Color.White, radius = w * 0.04f, center = Offset(w * (0.16f + 0.1f * i), h * 0.88f))
+    }
+}
