@@ -15,12 +15,12 @@ const val GLASS_BLUR = true
 
 /** Control sizes, tuned to match One UI proportions. */
 object Dims {
-    val shutter = 74.dp
-    val thumb = 52.dp
-    val flip = 54.dp
-    val dots = 38.dp
+    val shutter = 69.dp
+    val thumb = 50.dp
+    val flip = 51.dp
+    val dots = 34.dp
     val pillH = 40.dp
-    val pillBtn = 34.dp
+    val pillBtn = 32.dp
     val topIcon = 22.dp
 }
 
