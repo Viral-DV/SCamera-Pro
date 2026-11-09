@@ -47,7 +47,7 @@ fun digitalCrop(ctx: Context, uri: Uri, factor: Float) {
 }
 
 /** Unsharp mask on brightness, processed in strips so it does not need much memory. */
-private fun sharpen(bmp: Bitmap, amount: Float, r: Int) {
+internal fun sharpen(bmp: Bitmap, amount: Float, r: Int) {
     val w = bmp.width
     val h = bmp.height
     val div = 2f * r + 1f
