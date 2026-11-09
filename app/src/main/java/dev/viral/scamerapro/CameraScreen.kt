@@ -542,7 +542,12 @@ fun CameraScreen() {
         val f = digitalExtra
         val mInfo = if (solarMode && solarZoomOk) moonInfo else null
         val detailSnap = moonDetail
-        takePhoto(activity, controller) { uri ->
+        if (f > 1.01f && mInfo == null) {
+            showToast("Серия кадров: держи телефон ровно")
+            burstCapture(activity, controller, f, 5) { uri ->
+                if (uri != null) lastUri = uri else showToast("Серия не удалась")
+            }
+        } else takePhoto(activity, controller) { uri ->
             if (f > 1.01f || mInfo != null) {
                 Thread {
                     if (f > 1.01f) digitalCrop(activity, uri, f)
